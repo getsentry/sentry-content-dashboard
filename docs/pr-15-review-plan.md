@@ -106,7 +106,7 @@ Local production browser checks showed all 51 existing items; a temporary 52nd d
 item appeared on an ordinary new visit, was searchable, and displayed HTML-looking
 text literally. Markdown export escaped the same text and retained its partial-source
 warning. The test fixture was restored byte-for-byte. The new JavaScript gzip size
-is 217,193 bytes versus 217,089 before these fixes (+104 bytes). The production build
+is 217,201 bytes versus 217,089 before these fixes (+112 bytes). The production build
 and lint pass. Live production Redis and post-deployment telemetry delivery remain
 separate from this local evidence. Sentry SDK/replay configuration is unchanged.
 
@@ -124,5 +124,12 @@ results were already response-only, not stored; an added regression proves that.
 Successful refresh snapshots now explicitly select data/validator fields, so even
 a legacy input carrying response-only metadata cannot persist those flags on 304.
 
-Final local validation after follow-up fixes: all 67 tests (including three real-Redis
+Final local validation after follow-up fixes: all 72 tests (including four real-Redis
 integration cases), lint, and production build pass.
+
+The final cold-cache matrix also verifies that background/export reads reuse
+recent shared snapshots, while first visits revalidate. Coordination passes its
+observed snapshot into loaders for conditional validators and quota fallback;
+deferral also checks for a late-published snapshot. Partial stream timeout and
+protocol errors now report their underlying exception to Sentry while retaining
+delivered content. Intentional cancellation remains unreported.

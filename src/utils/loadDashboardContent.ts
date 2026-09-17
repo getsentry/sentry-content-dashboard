@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/nextjs';
 import { CONTENT_SOURCES, type ContentSource, type ContentItem, type ContentEvent } from './content';
 
 export interface DashboardContent {
@@ -69,6 +70,8 @@ export async function loadDashboardContent(
     if (signal.aborted) throw error;
     // Retain already delivered content, but never claim an interrupted stream completed.
     if (![...bySource.values()].some(items => items.length)) throw error;
+    // Preserve useful content without losing the underlying timeout/protocol error.
+    Sentry.captureException(error);
     pending.forEach(source => failed.add(source));
     pending.clear();
     onProgress(result());

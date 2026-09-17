@@ -195,7 +195,10 @@ saved content, and an immediate retry can read the owner's published snapshot.
 Forced refreshes only reuse another worker's result if it was fetched during the
 current request, including when the initial cache read was slow. Workers wait up to 18 seconds for an existing owner but only acquire
 a new lease in the first 2.5 seconds, leaving time for the 15-second upstream fetch.
-Redis connection/command timeouts are 1.5 seconds/1 second. Docs storage still
+Redis connection/command timeouts are 1.5 seconds/1 second. Background reads use the normal 30-second freshness boundary even after a soft
+read timeout; snapshots seen during coordination supply validators and quota
+fallback data. Partial stream timeouts/protocol errors are reported to Sentry
+without dropping content already displayed. Docs storage still
 requires working Redis on Vercel. Failed sources back off for 15 seconds per worker,
 preserving their last successful snapshot with an explicit refresh warning.
 Blog/changelog/YouTube revalidation sends ETag/Last-Modified when supplied by the

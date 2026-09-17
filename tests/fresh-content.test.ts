@@ -1,7 +1,8 @@
+import * as Sentry from '@sentry/nextjs';
 import { afterEach, expect, test, vi } from 'vitest';
 import { loadDashboardContent, type DashboardContent } from '../src/utils/loadDashboardContent';
 import { CONTENT_SOURCES, type ContentEvent, type ContentSource } from '../src/utils/content';
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 const encoder = new TextEncoder();
 const line = (event: ContentEvent) => encoder.encode(JSON.stringify(event) + '\n');
 function event(source: ContentSource, title = 'Fresh', refreshing = false): ContentEvent {
@@ -84,4 +85,42 @@ test('busy source retains content, settles the spinner, and exposes retry warnin
   expect(result.failedSources).toEqual(['blog']);
   expect(result.pendingSources).toEqual([]);
   expect(result.items.find(item => item.source === 'blog')?.title).toBe('Saved');
+});
+
+
+test('partial stream timeout is reported while retaining delivered content', async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(c) { controller = c; } }))));
+  const progress: DashboardContent[] = [];
+  const loading = loadDashboardContent(new AbortController().signal, value => progress.push(value));
+  await vi.waitFor(() => expect(controller).toBeDefined());
+  controller.enqueue(line(event('docs')));
+  await vi.waitFor(() => expect(progress).toHaveLength(1));
+  const timeout = new DOMException('Stream timed out', 'TimeoutError');
+  controller.error(timeout);
+  const result = await loading;
+  expect(Sentry.captureException).toHaveBeenCalledExactlyOnceWith(timeout);
+  expect(result.items).toHaveLength(1);
+  expect(result.failedSources).toEqual(['blog', 'youtube', 'changelog']);
+});
+test('malformed events after partial content report the protocol error', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(line(event('docs')));
+    controller.enqueue(encoder.encode('{"type":"invalid","source":"blog"}\n'));
+    controller.close();
+  } }))));
+  const result = await loadDashboardContent(new AbortController().signal);
+  expect(result.items).toHaveLength(1);
+  expect(Sentry.captureException).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: 'Invalid content event' }));
+});
+test('intentional cancellation is not reported as a stream failure', async () => {
+  const abort = new AbortController();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(c) { controller = c; } }))));
+  const loading = loadDashboardContent(abort.signal);
+  const rejected = expect(loading).rejects.toThrow('Cancelled');
+  await vi.waitFor(() => expect(controller).toBeDefined());
+  abort.abort(); controller.error(new Error('Cancelled'));
+  await rejected;
+  expect(Sentry.captureException).not.toHaveBeenCalled();
 });
