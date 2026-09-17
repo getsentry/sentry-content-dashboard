@@ -73,3 +73,15 @@ test('quota deferral preserves saved content and settles pending status', async 
   expect(result.failedSources).toEqual([]);
   expect(result.items.find(item => item.source === 'youtube')?.title).toBe('Saved');
 });
+
+test('busy source retains content, settles the spinner, and exposes retry warning', async () => {
+  const busy = event('blog', 'Saved');
+  if (busy.type === 'source') busy.snapshot.refreshBusy = true;
+  vi.stubGlobal('fetch', vi.fn(async () => stream([
+    busy, ...(['youtube', 'docs', 'changelog'] as const).map(source => event(source)), { type: 'done' },
+  ])));
+  const result = await loadDashboardContent(new AbortController().signal);
+  expect(result.failedSources).toEqual(['blog']);
+  expect(result.pendingSources).toEqual([]);
+  expect(result.items.find(item => item.source === 'blog')?.title).toBe('Saved');
+});

@@ -6,7 +6,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    return NextResponse.json((await refreshSource('blog')).items);
+    const snapshot = await refreshSource('blog');
+    return NextResponse.json(snapshot.items, { headers: snapshot.refreshBusy ? { 'X-Content-Refresh': 'busy' } : {} });
   } catch (error) {
     Sentry.captureException(error);
     return NextResponse.json({ error: 'Failed to fetch blog content' }, { status: 503 });

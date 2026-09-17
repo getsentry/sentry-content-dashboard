@@ -72,3 +72,11 @@ test('unlock failure does not hide an upstream failure', async () => {
     throw Error('upstream failure');
   })).rejects.toThrow('upstream failure');
 });
+
+test('cold forced refresh does not accept an old Redis snapshot when previous read timed out', async () => {
+  redis.data.set('content:v1:blog', JSON.stringify({ items: [], fetchedAt: Date.now() - 60000 }));
+  const fresh = { items: [], fetchedAt: Date.now() };
+  const load = vi.fn(async () => fresh);
+  expect(await redisSnapshots.refresh('blog', undefined, load, Date.now())).toEqual(fresh);
+  expect(load).toHaveBeenCalledOnce();
+});

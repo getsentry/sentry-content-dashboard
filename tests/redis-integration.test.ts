@@ -41,3 +41,16 @@ test.skipIf(!url)('real Redis coordinates cold workers and expired owners cannot
   expect(await shared.redis.get('content:v1:blog:lock')).toBe('new-owner');
   expect(await shared.redis.get('content:v1:blog')).toBeNull();
 });
+
+test.skipIf(!url)('slow cold read still revalidates a pre-existing Redis snapshot on first visit', async () => {
+  await shared.redis.del('content:v1:blog:lock');
+  await shared.redis.set('content:v1:blog', JSON.stringify({ items: [], fetchedAt: Date.now() - 10000 }));
+  const slowStore = { ...redisSnapshots, read: async (source: Parameters<typeof redisSnapshots.read>[0]) => {
+    await new Promise(resolve => setTimeout(resolve, 650));
+    return redisSnapshots.read(source);
+  } };
+  const load = vi.fn(async () => ({ items: [{ title: 'New on first visit', url: 'https://example.com/new', publishedAt: '2026-09-17' }] }));
+  const cache = new SourceCache({ blog: load, docs: load, youtube: load, changelog: load }, slowStore);
+  expect((await cache.refresh('blog', true)).items[0].title).toBe('New on first visit');
+  expect(load).toHaveBeenCalledOnce();
+});

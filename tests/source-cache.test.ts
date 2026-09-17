@@ -121,3 +121,49 @@ test('deferred refresh retains original freshness timestamp and does not poison 
   load.mockResolvedValue({ items: [item('New')] });
   expect((await cache.refresh('youtube', true)).items[0].title).toBe('New');
 });
+
+test('busy refresh returns labeled saved content and immediate retry reads the owner result', async () => {
+  const { RefreshCoordinationError } = await import('../src/server/cacheErrors');
+  const saved = { items: normalizeForTest('Saved'), fetchedAt: Date.now() - 10000 };
+  let stored = saved;
+  const store: SnapshotStore = { read: async () => stored, refresh: vi.fn(async () => {
+    throw new RefreshCoordinationError('busy');
+  }) };
+  const load = vi.fn();
+  const cache = new SourceCache(loaders(load), store);
+  const result = await cache.refresh('blog', true);
+  expect(result.refreshBusy).toBe(true);
+  expect(result.items[0].title).toBe('Saved');
+  stored = { items: normalizeForTest('Owner published'), fetchedAt: Date.now() };
+  expect((await cache.refresh('blog')).items[0].title).toBe('Owner published');
+  expect(load).not.toHaveBeenCalled();
+});
+test('coordination failure without a snapshot also permits an immediate retry', async () => {
+  const { RefreshCoordinationError } = await import('../src/server/cacheErrors');
+  const store: SnapshotStore = { read: async () => undefined,
+    refresh: vi.fn().mockRejectedValueOnce(new RefreshCoordinationError('busy')).mockImplementationOnce(async (_s, _p, load) => load()) };
+  const cache = new SourceCache(loaders(async () => ({ items: [item('Available')] })), store);
+  await expect(cache.refresh('blog')).rejects.toThrow('busy');
+  expect((await cache.refresh('blog')).items[0].title).toBe('Available');
+});
+function normalizeForTest(title: string) {
+  return [{ ...item(title), id: 'blog-test', source: 'blog' as const, description: '', categories: [] }];
+}
+
+test('successful conditional refresh strips response-only status and deferrals are never cached', async () => {
+  const { RefreshDeferredError } = await import('../src/server/cacheErrors');
+  const load = vi.fn().mockResolvedValue({ items: [item('Saved')], etag: 'version-1' });
+  const cache = new SourceCache(loaders(load));
+  const original = await cache.refresh('youtube');
+  load.mockRejectedValueOnce(new RefreshDeferredError(Date.now() + 1));
+  expect((await cache.refresh('youtube', true)).refreshDeferredUntil).toBeDefined();
+  expect((await cache.read('youtube'))?.refreshDeferredUntil).toBeUndefined();
+  // A 304 loader may return its input object. Do not persist response metadata even
+  // if a future caller or legacy snapshot supplies it alongside unchanged content.
+  load.mockResolvedValue({ ...original, refreshDeferredUntil: Date.now() - 1, refreshBusy: true });
+  const refreshed = await cache.refresh('youtube', true);
+  expect(refreshed.refreshDeferredUntil).toBeUndefined();
+  expect(refreshed.refreshBusy).toBeUndefined();
+  expect(refreshed.etag).toBe('version-1');
+  expect(refreshed.items).toEqual(original.items);
+});

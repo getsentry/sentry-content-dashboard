@@ -11,8 +11,10 @@ export async function GET() {
     console.log('Markdown export API request received');
 
     const deferred: string[] = [];
+    const busy: string[] = [];
     const load = (source: Parameters<typeof refreshSource>[0]) => async () => {
       const snapshot = await refreshSource(source);
+      if (snapshot.refreshBusy) busy.push(source);
       if (snapshot.refreshDeferredUntil) deferred.push(source);
       return snapshot.items;
     };
@@ -25,7 +27,8 @@ export async function GET() {
     const warning = failedSources.length
       ? `> Partial export. Unavailable sources: ${failedSources.join(', ')}.\n\n` : '';
     const deferredWarning = deferred.length ? `> Saved content; refresh deferred: ${deferred.join(', ')}.\n\n` : '';
-    const markdown = warning + deferredWarning + generateMarkdown(items);
+    const busyWarning = busy.length ? `> Saved content; another refresh is still busy: ${busy.join(', ')}.\n\n` : '';
+    const markdown = warning + deferredWarning + busyWarning + generateMarkdown(items);
 
     // Return as markdown with proper content type
     return new NextResponse(markdown, {

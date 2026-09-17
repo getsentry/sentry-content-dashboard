@@ -61,6 +61,7 @@ export interface SourceSnapshot extends SourcePayload {
   items: ContentItem[];
   fetchedAt: number;
   refreshDeferredUntil?: number;
+  refreshBusy?: boolean;
 }
 export type ContentEvent =
   | { type: 'source'; source: ContentSource; snapshot: SourceSnapshot; refreshing: boolean }

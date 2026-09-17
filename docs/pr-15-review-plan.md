@@ -106,6 +106,23 @@ Local production browser checks showed all 51 existing items; a temporary 52nd d
 item appeared on an ordinary new visit, was searchable, and displayed HTML-looking
 text literally. Markdown export escaped the same text and retained its partial-source
 warning. The test fixture was restored byte-for-byte. The new JavaScript gzip size
-is 217,183 bytes versus 217,089 before these fixes (+94 bytes). The production build
+is 217,193 bytes versus 217,089 before these fixes (+104 bytes). The production build
 and lint pass. Live production Redis and post-deployment telemetry delivery remain
 separate from this local evidence. Sentry SDK/replay configuration is unchanged.
+
+### Follow-up automated review
+
+Two additional cold-start/lease-wait findings were reproduced and fixed: forced
+refreshes now use a request-start freshness boundary when the initial shared read
+times out, and coordination-busy outcomes do not apply an upstream failure backoff.
+Busy results preserve labeled content; immediate retries can read an owner's new
+snapshot. A real-Redis regression includes a 650 ms initial read with old cached
+content and verifies first-visit revalidation still occurs.
+
+A further review suggested 304 results could retain deferral status. Deferral
+results were already response-only, not stored; an added regression proves that.
+Successful refresh snapshots now explicitly select data/validator fields, so even
+a legacy input carrying response-only metadata cannot persist those flags on 304.
+
+Final local validation after follow-up fixes: all 67 tests (including three real-Redis
+integration cases), lint, and production build pass.

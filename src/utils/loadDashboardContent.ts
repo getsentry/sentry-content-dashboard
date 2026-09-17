@@ -40,6 +40,8 @@ export async function loadDashboardContent(
       bySource.set(event.source, event.snapshot.items);
       if (!event.refreshing) {
         pending.delete(event.source);
+        if (event.snapshot.refreshBusy) failed.add(event.source);
+        else failed.delete(event.source);
         if (event.snapshot.refreshDeferredUntil) deferred.add(event.source);
         else deferred.delete(event.source);
       }

@@ -190,7 +190,10 @@ workers; locally an in-memory worker cache coalesces simultaneous requests.
 Redis snapshot reads have a 400 ms soft display deadline; late results still warm
 the worker cache and a slow read does not disable shared coordination. Actual
 transport failures back off for 15 seconds. Lease contention/loss does not disable
-other sources. Workers wait up to 18 seconds for an existing owner but only acquire
+other sources or impose an upstream-failure backoff. Busy results retain labeled
+saved content, and an immediate retry can read the owner's published snapshot.
+Forced refreshes only reuse another worker's result if it was fetched during the
+current request, including when the initial cache read was slow. Workers wait up to 18 seconds for an existing owner but only acquire
 a new lease in the first 2.5 seconds, leaving time for the 15-second upstream fetch.
 Redis connection/command timeouts are 1.5 seconds/1 second. Docs storage still
 requires working Redis on Vercel. Failed sources back off for 15 seconds per worker,
@@ -223,7 +226,7 @@ Run `npm test`, `npm run lint`, and `npm run build` before publication. The Vali
 workflow runs these on PRs with an isolated Redis service. To include real-Redis
 tests locally, set `REDIS_TEST_URL` to an **isolated test database**; those tests use
 `content:v1:blog` keys and must never target application data. Without that variable,
-the two Redis integration cases are explicitly skipped.
+the Redis integration cases are explicitly skipped.
 
 The initial page fonts are self-hosted under `public/fonts/`, with their licenses.
 Replay remains eagerly initialized and unmasked; Logs and tracing stay enabled.

@@ -6,7 +6,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    return NextResponse.json((await refreshSource('changelog')).items);
+    const snapshot = await refreshSource('changelog');
+    return NextResponse.json(snapshot.items, { headers: snapshot.refreshBusy ? { 'X-Content-Refresh': 'busy' } : {} });
   } catch (error) {
     Sentry.captureException(error);
     return NextResponse.json({ error: 'Failed to fetch changelog content' }, { status: 503 });

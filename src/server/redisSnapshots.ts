@@ -21,7 +21,7 @@ export const redisSnapshots: SnapshotStore = {
     if (!Number.isFinite(value.fetchedAt)) throw new Error('Invalid content snapshot timestamp');
     return { ...value, items: normalizeContent(value.items, source) };
   },
-  async refresh(source, previous, load) {
+  async refresh(source, previous, load, requestedAt = Date.now()) {
     const redis = await getRedisClient();
     const lock = `${key(source)}:lock`;
     const token = randomUUID();
@@ -30,7 +30,8 @@ export const redisSnapshots: SnapshotStore = {
     for (;;) {
       if (Date.now() >= deadline) throw new RefreshCoordinationError('Content refresh busy; retry shortly');
       const current = await this.read(source);
-      if (current && current.fetchedAt > (previous?.fetchedAt || 0)) return current;
+      if (current && current.fetchedAt >= requestedAt &&
+          (!previous || current.fetchedAt > previous.fetchedAt)) return current;
       // Wait for an existing owner, but never start a 15s fetch after a long wait.
       if (Date.now() < acquireDeadline && await redis.set(lock, token, 'PX', 18000, 'NX')) break;
       await new Promise(resolve => setTimeout(resolve, 100));
