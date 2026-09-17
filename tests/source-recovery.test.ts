@@ -1,8 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 const storage = vi.hoisted(() => ({ getChangelogEntries: vi.fn(), getRedisClient: vi.fn() }));
-const filesystem = vi.hoisted(() => ({ readFile: vi.fn(async () => JSON.stringify({ knownPages: [] })) }));
 vi.mock('../src/utils/changelogStorage', () => storage);
-vi.mock('fs/promises', () => filesystem);
+vi.mock('fs/promises', () => ({ readFile: vi.fn(async () => JSON.stringify({ knownPages: [] })) }));
 vi.mock('../config', () => ({ config: { youtube: { apiKey: 'test-key', channelId: 'channel', maxResults: 50 }, content: { daysToShow: 90 } } }));
 import { load as youtube } from '../src/server/sources/youtube';
 import { load as docs } from '../src/server/sources/docs';
@@ -71,12 +70,10 @@ test('healthy Docs history preserves stored summaries without a GitHub dependenc
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-test('Docs keeps static content available when storage and GitHub are unavailable', async () => {
+test('Docs reports failure when storage and GitHub are unavailable', async () => {
   storage.getChangelogEntries.mockRejectedValue(Error('Redis unavailable'));
-  filesystem.readFile.mockResolvedValueOnce(JSON.stringify({ knownPages: [{ id: 'static', title: 'Static docs',
-    description: '', url: 'https://docs.sentry.io/', publishedAt: '2026-09-01' }] }));
   vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
-  expect((await docs()).items).toMatchObject([{ id: 'static', title: 'Static docs' }]);
+  await expect(docs()).rejects.toThrow('GitHub docs history request failed (403)');
 });
 
 test('Docs recovery keeps valid commits when another path or commit is invalid', async () => {
