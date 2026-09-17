@@ -1,85 +1,33 @@
-import { NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
+import { NextRequest, NextResponse } from 'next/server';
 import { Octokit } from '@octokit/rest';
+import { verifyTriggerToken } from '../../../../utils/githubAuth';
+import { processDocsChanges } from '../../../../utils/githubProcessor';
 
-const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN,
-});
-
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const secret = process.env.GITHUB_TRIGGER_SECRET;
+  if (!secret) return NextResponse.json({ error: 'Manual trigger not configured' }, { status: 503 });
+  if (!verifyTriggerToken(request.headers.get('authorization'), secret)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!process.env.GITHUB_TOKEN) return NextResponse.json({ error: 'GitHub token not configured' }, { status: 503 });
   try {
-    if (!process.env.GITHUB_TOKEN) {
-      return NextResponse.json(
-        { error: 'GitHub token not configured' },
-        { status: 400 }
-      );
-    }
-
-    // Get recent commits from sentry-docs master branch
+    const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
     const { data: commits } = await octokit.rest.repos.listCommits({
-      owner: 'getsentry',
-      repo: 'sentry-docs',
-      branch: 'master',
-      per_page: 10,
+      owner: 'getsentry', repo: 'sentry-docs', sha: 'master', per_page: 10,
     });
-
-    console.log(`Found ${commits.length} recent commits`);
-
-    // Process each commit
     const results = [];
-    for (const commit of commits) {
-      try {
-        // Get detailed commit information
-        const { data: commitDetails } = await octokit.rest.repos.getCommit({
-          owner: 'getsentry',
-          repo: 'sentry-docs',
-          ref: commit.sha,
-        });
-
-        // Check if any documentation files were changed
-        const docFiles = commitDetails.files?.filter(file => 
-          file.filename.endsWith('.md') || 
-          file.filename.endsWith('.mdx') ||
-          file.filename.includes('/docs/') ||
-          file.filename.includes('/documentation/')
-        ) || [];
-
-        if (docFiles.length > 0) {
-          results.push({
-            sha: commit.sha,
-            message: commit.commit.message,
-            author: commit.commit.author?.name,
-            date: commit.commit.author?.date,
-            filesChanged: docFiles.length,
-            files: docFiles.map(f => f.filename),
-          });
-        }
-      } catch (error) {
-        console.error(`Error processing commit ${commit.sha}:`, error);
-      }
+    for (const commit of [...commits].reverse()) {
+      const processed = await processDocsChanges({ id: commit.sha });
+      results.push({ sha: commit.sha, processed });
     }
-
-    return NextResponse.json({
-      message: 'Manual trigger completed',
-      commitsProcessed: results.length,
-      results,
-    });
-
+    return NextResponse.json({ message: 'Manual trigger completed', commitsProcessed: results.filter(r => r.processed).length, results });
   } catch (error) {
-    console.error('Error in manual trigger:', error);
-    return NextResponse.json(
-      {
-        error: 'Failed to trigger GitHub processing',
-        details: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    Sentry.captureException(error);
+    return NextResponse.json({ error: 'Failed to process commits; retry the trigger' }, { status: 500 });
   }
 }
 
 export async function GET() {
-  return NextResponse.json({
-    message: 'GitHub trigger endpoint is active',
-    usage: 'POST to this endpoint to manually process recent commits',
-    timestamp: new Date().toISOString(),
-  });
+  return NextResponse.json({ message: 'GitHub trigger endpoint is active', usage: 'POST with Authorization: Bearer <GITHUB_TRIGGER_SECRET> to ingest recent commits' });
 }

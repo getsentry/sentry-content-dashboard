@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import axios from 'axios';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import Image from 'next/image';
+import { type ContentItem, type ContentSource } from '../utils/content';
+import { loadDashboardContent } from '../utils/loadDashboardContent';
 import { CATEGORIES, getCategoryById, getCategoryName } from '../utils/categoryDetector';
 
 // Custom hook for swirling animation
@@ -30,23 +31,13 @@ const HamburgerIcon = ({ isOpen }: { isOpen: boolean }) => (
   </div>
 );
 
-interface ContentItem {
-  id: string;
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-  source: 'blog' | 'youtube' | 'docs' | 'changelog';
-  thumbnail?: string;
-  author?: string;
-  duration?: string;
-  lastModified?: string;
-  categories: string[];
-}
-
 export default function Home() {
   const [content, setContent] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingSources, setPendingSources] = useState<ContentSource[]>([]);
+  const currentContent = useRef<ContentItem[]>([]);
+  const lastRefresh = useRef(0);
+  const [failedSources, setFailedSources] = useState<ContentSource[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'blog' | 'youtube' | 'docs' | 'changelog'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -56,41 +47,78 @@ export default function Home() {
   // Swirling animation for desktop header
   const isSwirling = useSwirlingAnimation(2500);
 
-  useEffect(() => {
-    fetchContent();
+  const activeRequest = useRef<AbortController | null>(null);
+  const fetchContent = useCallback(async (background = false) => {
+    // Visibility and history restoration may fire together; share the in-flight load.
+    if (activeRequest.current || (background && Date.now() - lastRefresh.current < 30000)) return;
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    try {
+      if (!background && !currentContent.current.length) setLoading(true);
+      setPendingSources(['blog', 'youtube', 'docs', 'changelog']);
+      const started = performance.now();
+      let firstVisible = false;
+      const result = await Sentry.startSpan({ name: 'Load dashboard content', op: 'function' },
+        () => loadDashboardContent(controller.signal, progress => {
+          if (controller.signal.aborted) return;
+          currentContent.current = progress.items;
+          setContent(progress.items);
+          setFailedSources(progress.failedSources);
+          setPendingSources(progress.pendingSources);
+          if (progress.items.length || !progress.pendingSources.length) {
+            setLoading(false);
+            setError(null);
+          }
+          if (!firstVisible && progress.items.length) {
+            firstVisible = true;
+            Sentry.logger.info('First dashboard content visible', { durationMs: performance.now() - started });
+          }
+        }, { refresh: !background, initialItems: currentContent.current }));
+      if (controller.signal.aborted) return;
+      setFailedSources(result.failedSources);
+      if (result.failedSources.length === 4 && !result.items.length) throw new Error('All content sources are unavailable');
+      setError(null);
+      currentContent.current = result.items;
+      setContent(result.items);
+      lastRefresh.current = Date.now();
+      if (result.failedSources.length) {
+        Sentry.logger.warn('Some content sources unavailable', { sources: result.failedSources.join(',') });
+      }
+      Sentry.logger.info('Dashboard content loaded', { itemCount: result.items.length });
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      Sentry.captureException(err);
+      Sentry.logger.error('Dashboard content loading failed');
+      console.error('Error fetching content:', err);
+      // Keep the existing list visible if a background refresh fails.
+      if (!currentContent.current.length) setError('Failed to fetch content. Please try again later.');
+      else setFailedSources(['blog', 'youtube', 'docs', 'changelog']);
+    } finally {
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        setLoading(false);
+        setPendingSources([]);
+      }
+    }
   }, []);
 
-  const fetchContent = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Fetch all content sources
-      const [blogResponse, youtubeResponse, docsResponse, changelogResponse] = await Promise.all([
-        axios.get('/api/blog'),
-        axios.get('/api/youtube'),
-        axios.get('/api/docs'),
-        axios.get('/api/changelog')
-      ]);
-
-      const blogPosts = blogResponse.data || [];
-      const youtubeVideos = youtubeResponse.data || [];
-      const docsItems = (docsResponse.data || []) as ContentItem[];
-      const changelogItems = (changelogResponse.data || []) as ContentItem[];
-
-      // Combine and sort by publication date
-      const allContent = [...blogPosts, ...youtubeVideos, ...docsItems, ...changelogItems].sort((a, b) => 
-        new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-      );
-
-      setContent(allContent);
-    } catch (err) {
-      console.error('Error fetching content:', err);
-      setError('Failed to fetch content. Please try again later.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    void fetchContent();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void fetchContent(true);
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void fetchContent(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onPageShow);
+      activeRequest.current?.abort();
+      activeRequest.current = null;
+    };
+  }, [fetchContent]);
 
   const getContentStats = () => {
     const blogCount = content.filter(item => item.source === 'blog').length;
@@ -191,7 +219,7 @@ export default function Home() {
           </h1>
           <p className="text-red-300 mb-6 sm:mb-8 text-sm sm:text-lg lg:text-xl font-['VT323'] px-2">{error}</p>
           <button 
-            onClick={fetchContent}
+            onClick={() => void fetchContent()}
             className="retro-button px-4 sm:px-6 lg:px-8 py-2 sm:py-3 lg:py-4 text-sm sm:text-lg lg:text-xl font-['Press_Start_2P']"
           >
             RETRY CONNECTION
@@ -203,6 +231,15 @@ export default function Home() {
 
   return (
     <div className="min-h-screen pixel-bg">
+      {pendingSources.length > 0 && (
+        <div role="status" className="p-3 text-center text-cyan-200">Updating {pendingSources.join(', ')}…</div>
+      )}
+      {failedSources.length > 0 && (
+        <div role="status" className="p-4 text-center text-yellow-200 bg-yellow-950">
+          Showing available content. Could not refresh: {failedSources.join(', ')}.
+          <button className="ml-3 underline" onClick={() => void fetchContent()}>Retry sources</button>
+        </div>
+      )}
       {/* Header */}
       <header className="pixel-border bg-retro-card/80 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8">
@@ -604,11 +641,13 @@ export default function Home() {
   );
 }
 
-function ContentCard({ item }: { item: ContentItem }) {
+const contentDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
   const isYouTube = item.source === 'youtube';
   const isDocs = item.source === 'docs';
   const isChangelog = item.source === 'changelog';
-  const publishedDate = format(new Date(item.publishedAt), 'MMM d, yyyy');
+  const publishedDate = contentDate.format(new Date(item.publishedAt));
   
   return (
     <div className={`bg-retro-card backdrop-blur-sm rounded-lg transition-all duration-300 hover:scale-105 ${
@@ -718,4 +757,4 @@ function ContentCard({ item }: { item: ContentItem }) {
       </div>
     </div>
   );
-}
+});

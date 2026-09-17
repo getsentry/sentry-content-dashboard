@@ -1,81 +1,36 @@
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
-import axios from 'axios';
-import { headers } from 'next/headers';
+import { collectContent, type ContentItem } from '../../../../utils/content';
+import { refreshSource } from '../../../../server/contentService';
 
-interface ContentItem {
-  id: string;
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-  source: 'blog' | 'youtube' | 'docs' | 'changelog';
-  thumbnail?: string;
-  author?: string;
-  duration?: string;
-  lastModified?: string;
-}
-
-interface DocsPage {
-  title: string;
-  description: string;
-  url: string;
-  lastModified: string;
-  source: 'docs';
-}
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     console.log('Markdown export API request received');
 
-    // Get the base URL from the request headers
-    const headersList = await headers();
-    const host = headersList.get('host') || 'localhost:3000';
-    const protocol = headersList.get('x-forwarded-proto') || 'http';
-    const baseUrl = `${protocol}://${host}`;
-
-    console.log('Base URL for API calls:', baseUrl);
-
-    // Fetch all content sources using full URLs
-    const [blogResponse, youtubeResponse, docsResponse, changelogResponse] = await Promise.all([
-      axios.get(`${baseUrl}/api/blog`),
-      axios.get(`${baseUrl}/api/youtube`),
-      axios.get(`${baseUrl}/api/docs`),
-      axios.get(`${baseUrl}/api/changelog`)
-    ]);
-
-    const blogPosts = blogResponse.data || [];
-    const youtubeVideos = youtubeResponse.data || [];
-    const docsPages = docsResponse.data || [];
-    const changelogItems = changelogResponse.data || [];
-
-    // Transform docs pages to match content item format
-    const transformedDocs = docsPages.map((page: DocsPage) => ({
-      id: `docs-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      title: page.title,
-      description: page.description,
-      url: page.url,
-      publishedAt: page.lastModified || page.lastModified,
-      source: 'docs' as const,
-      lastModified: page.lastModified
-    }));
-
-    // Combine and sort by publication date
-    const allContent = [...blogPosts, ...youtubeVideos, ...transformedDocs, ...changelogItems].sort((a, b) => 
-      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-    );
-
-    // Generate markdown content
-    const markdown = generateMarkdown(allContent);
+    const load = (source: Parameters<typeof refreshSource>[0]) => async () => (await refreshSource(source)).items;
+    const { items, failedSources } = await collectContent({
+      blog: load('blog'), youtube: load('youtube'), docs: load('docs'), changelog: load('changelog'),
+    });
+    if (failedSources.length === 4) {
+      return NextResponse.json({ error: 'All content sources are unavailable' }, { status: 503 });
+    }
+    const warning = failedSources.length
+      ? `> Partial export. Unavailable sources: ${failedSources.join(', ')}.\n\n` : '';
+    const markdown = warning + generateMarkdown(items);
 
     // Return as markdown with proper content type
     return new NextResponse(markdown, {
       headers: {
         'Content-Type': 'text/markdown; charset=utf-8',
+        'X-Unavailable-Sources': failedSources.join(','),
         'Content-Disposition': 'attachment; filename="sentry-content-export.md"'
       }
     });
 
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error generating markdown export:', error);
     return NextResponse.json(
       {

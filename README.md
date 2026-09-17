@@ -88,6 +88,43 @@ Enable ChatGPT to generate user-friendly summaries of documentation changes:
 
 See [AI_SUMMARIES.md](./AI_SUMMARIES.md) for detailed setup instructions and examples.
 
+## Sentry error monitoring
+
+The Next.js SDK captures browser, Node.js, and Edge errors and traces. Caught API,
+storage, and content-loading errors are reported explicitly. Traces are sampled at
+100% in development and 10% in production. Structured Sentry logs record content-load
+outcomes and documentation ingestion failures without forwarding raw console output.
+Session Replay captures 100% of development sessions, 10% of production sessions,
+and 100% of sessions with errors. Replay records public page text, input values, and attributes without masking,
+and displays media. Network body capture remains disabled. This applies to new
+recordings after deployment; existing masked recordings cannot be unmasked.
+
+1. Copy `.env.example` to `.env.local` and fill in `NEXT_PUBLIC_SENTRY_DSN` from the
+   intended Sentry project's **Settings → Client Keys (DSN)**. Server and Edge use
+   that DSN too; `SENTRY_DSN` is an optional override.
+2. Set `NEXT_PUBLIC_SENTRY_ENVIRONMENT` and `SENTRY_ENVIRONMENT` to the same value
+   (`development`, `preview`, or `production`). Restart development after changing them.
+3. For readable production stack traces, set `SENTRY_ORG`, `SENTRY_PROJECT`, and
+   the secret `SENTRY_AUTH_TOKEN` in the build environment. Source map upload is
+   disabled without that token. Never prefix the token with `NEXT_PUBLIC_`.
+4. Add these variables to the appropriate Vercel environments **before rebuilding**:
+   browser DSN/environment values are embedded at build time. The Sentry build plugin
+   detects the release from the Git SHA; set `SENTRY_RELEASE` to an immutable build ID
+   if Git metadata is unavailable.
+
+Initialization lives in `src/instrumentation-client.ts`, `src/sentry.server.config.ts`,
+and `src/sentry.edge.config.ts`, with shared sampling/privacy options in
+`src/utils/sentryOptions.ts`. Missing DSNs disable event delivery. Request bodies,
+headers, cookies, query values, AI input/output, local variables, and console
+breadcrumbs are excluded from telemetry.
+
+To verify a configured project, run the app and trigger a temporary deliberate error
+through a route or a button handler (not the browser console). Confirm its unique
+message and readable stack frames in Sentry, then remove the trigger. A passing
+build or local transport check alone does not establish that Sentry received it.
+
+See [Sentry's Next.js setup guide](https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/).
+
 ## 🏷️ Content Categories
 
 The app automatically categorizes content into 5 main categories:
@@ -100,45 +137,73 @@ The app automatically categorizes content into 5 main categories:
 
 Content is automatically categorized using intelligent keyword matching and can appear in multiple categories for better discoverability.
 
-## 📊 Docs Monitoring Cron Job
+## Documentation ingestion and monitoring
 
-The app includes an automated system to monitor Sentry's documentation for new pages.
+Run `npm run monitor-docs` to check the sitemap locally. The first successful run
+records a baseline of URLs without presenting old pages as new. Later runs add
+new pages; failed downloads stay pending for retry. Preserve `data/docs-pages.json`
+between runs. This project does not include a deployed daily sitemap schedule.
 
-### How It Works
+For GitHub commit monitoring, copy **all** of `monitoring-repo/` into a dedicated
+monitoring repository, including `poll-github.cjs` and the workflow. See its README
+for secrets and write permissions. It runs every 15 minutes and persists its
+checkpoint in Git. Local alternatives are `npm run poll-github` (continuous) and
+`node scripts/cron-check.js` (one run); both share
+`data/github-polling-state.json`. Run only one local poller at a time and preserve
+that file. They require `GITHUB_WEBHOOK_SECRET` and `WEBHOOK_URL`; `GITHUB_TOKEN`
+is recommended for GitHub API limits. First run ingests the newest ten commits,
+then subsequent runs paginate back to the saved checkpoint. Bootstrap batches
+are persisted before delivery, so a first-run failure is also retryable.
 
-1. **Daily Monitoring**: Runs automatically every day at 2 AM UTC via GitHub Actions
-2. **Sitemap Crawling**: Checks `https://docs.sentry.io/sitemap.xml` for new pages
-3. **Content Discovery**: Automatically discovers and indexes new documentation
-4. **Smart Filtering**: Only shows documentation from the last 90 days
+On upgrading from the old cron script, copy the SHA from `data/last-commit-sha.txt`
+into `data/github-polling-state.json` as `{"lastProcessedSha":"<40-character SHA>"}`
+before starting the new poller to retain its boundary. A missing checkpoint in
+GitHub history fails explicitly; reconcile it after a force-push before retrying.
 
-### Manual Monitoring
+Set `GITHUB_TOKEN` and a nonempty `GITHUB_WEBHOOK_SECRET` on the application.
+Unsigned webhooks are rejected. Manual ingestion uses a separate
+`GITHUB_TRIGGER_SECRET` and requires `Authorization: Bearer <token>` on
+`POST /api/github/trigger`; it processes the newest ten commits and reports results.
+`npm run test-github` reads that token from the environment.
 
-You can run the monitoring script manually:
+Production on Vercel requires `REDIS_URL`; writes atomically merge into the existing
+`docs-changelog` JSON key. Local storage uses an exclusive directory lock and
+atomic rename. Storage corruption/read failures are surfaced rather than treated
+as empty history. If a local writer is killed, stop all app/ingestion processes,
+back up `data/docs-changelog.json`, then remove the abandoned
+`data/docs-changelog.json.lock` directory before restarting. Never remove a live
+writer's lock. Failed deliveries retry safely; saved commit IDs are deduplicated.
 
-```bash
-npm run monitor-docs
-```
+Each dashboard visit uses one streaming `GET /api/content?refresh=1` request.
+Available source snapshots appear immediately; independent sources refresh in
+parallel and update the same page as each completes. A slow or unavailable source
+does not hide the others, and the page identifies sources still updating or failed.
+First visits and manual retries revalidate even recent snapshots. Background tab
+returns are throttled to once per 30 seconds and reuse snapshots younger than
+30 seconds. Documentation is reread on each server refresh so ingestion changes
+remain visible. Snapshots older than 24 hours are discarded.
 
-This will:
-- Fetch the current docs sitemap
-- Compare with previously known pages
-- Download and parse new pages
-- Update the local storage
+Source refreshes are shared with individual source APIs and Markdown exports.
+With `REDIS_URL`, normalized snapshots and 18-second refresh leases coordinate
+workers; locally an in-memory worker cache coalesces simultaneous requests.
+Redis snapshot-read failures fall back to the worker cache after 400 ms so an
+optional cache outage does not disable healthy external feeds. Docs storage still
+requires working Redis on Vercel. Failed sources back off for 15 seconds per worker,
+preserving their last successful snapshot with an explicit refresh warning.
+Blog/changelog/YouTube revalidation sends ETag/Last-Modified when supplied by the
+upstream, allowing unchanged bodies/parsing to be reused. Network cancellation
+stops delivery to that viewer while an in-progress shared refresh can still finish.
 
-### GitHub Actions Setup
+The initial page fonts are self-hosted under `public/fonts/`, with their licenses.
+Replay remains eagerly initialized and unmasked; Logs and tracing stay enabled.
+Only internal Sentry debug code is removed from the production bundle. Dates use
+native Intl formatting instead of loading a browser date-formatting dependency.
+Stable source IDs preserve existing cards across refreshes.
 
-The cron job is configured in `.github/workflows/monitor-docs.yml` and will:
+Dashboard and Markdown export retain healthy sources when another is unavailable
+and identify missing sources. If every source fails and no usable snapshot exists,
+the dashboard shows an error; an all-failed export returns HTTP 503.
 
-- Run automatically every day
-- Use your repository's secrets for API keys
-- Commit and push new content discoveries
-- Keep your aggregator up-to-date
-
-### Required Secrets
-
-Add these to your GitHub repository secrets:
-
-- `YOUTUBE_API_KEY`: Your YouTube Data API v3 key
 
 ## 🎨 Customization
 
@@ -194,7 +259,7 @@ sentry-content-aggregator/
 │   └── monitor-docs.js        # Docs monitoring script
 ├── .github/
 │   └── workflows/
-│       └── monitor-docs.yml   # GitHub Actions cron job
+│       └── (see monitoring-repo/ for the separate monitoring workflow)
 ├── data/
 │   └── docs-pages.json        # Discovered docs storage
 └── config.ts                  # App configuration

@@ -1,31 +1,25 @@
 # Sentry Docs Monitor
 
-This repository monitors the `getsentry/sentry-docs` repository for changes and triggers webhooks to update the Sentry Content Aggregator.
+Copy this directory's contents (including `.github/` and `poll-github.cjs`) into
+a dedicated GitHub repository. The workflow runs every 15 minutes against
+`getsentry/sentry-docs` on `master`.
 
-## How it works
+Set repository Actions secrets `WEBHOOK_URL` (the application's
+`/api/github/webhook` URL) and `WEBHOOK_SECRET` (matching the app's
+`GITHUB_WEBHOOK_SECRET`). The app also needs `GITHUB_TOKEN` to retrieve commit
+contents. Enable Actions and allow the workflow's `contents: write` permission;
+repository rules must permit its checkpoint commits on the default branch.
 
-- Runs every 15 minutes via GitHub Actions
-- Checks for new commits in the `getsentry/sentry-docs` repository
-- Filters for commits that change documentation files
-- Triggers webhook to the main application
+The first run persists a batch of the latest ten commits, then delivers oldest
+first. Subsequent runs paginate until the saved checkpoint. The app checks each
+commit for documentation changes and persists relevant entries. On any failure,
+processing stops; only successful progress is recorded. The workflow commits
+`last-processed-sha.json` even when a later delivery fails. Failed checkpoint pushes
+fail visibly and may replay deliveries on the next run; the app deduplicates IDs.
+Workflow concurrency prevents overlapping runs.
 
-## Setup
-
-1. Fork or clone this repository
-2. Add the following secrets in Settings → Secrets and variables → Actions:
-   - `WEBHOOK_URL`: Your application's webhook URL
-   - `WEBHOOK_SECRET`: Your webhook secret
-3. Enable GitHub Actions in the Actions tab
-
-## Monitoring
-
-- Check the Actions tab to see when the workflow runs
-- View logs to see what commits are being processed
-- The workflow will automatically start running once enabled
-
-## Configuration
-
-The workflow runs every 15 minutes and checks for:
-- New commits in the `master` branch
-- Changes to documentation files (`.md`, `.mdx`, files in `/docs/` directories)
-- Triggers webhook only for relevant changes
+When upgrading, migrate any existing `last-processed-sha.txt` into JSON:
+`{"lastProcessedSha":"<40-character SHA>"}`. Preserve this file across runs.
+If the SHA is no longer in upstream history, reconcile the boundary manually;
+the monitor refuses to silently skip missing history. Inspect failed runs in
+Actions, correct the upstream/storage/authentication problem, and rerun.

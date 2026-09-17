@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
 import { getChangelogEntries } from '../../../../utils/changelogStorage';
 
@@ -10,6 +11,8 @@ interface ChangelogEntry {
   title: string;
   url: string;
 }
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -40,10 +43,11 @@ export async function GET() {
     return new NextResponse(rss, {
       headers: {
         'Content-Type': 'application/rss+xml',
-        'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400'
+        'Cache-Control': 'no-store, max-age=0'
       }
     });
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error generating RSS feed:', error);
     return NextResponse.json({ error: 'Failed to generate feed' }, { status: 500 });
   }

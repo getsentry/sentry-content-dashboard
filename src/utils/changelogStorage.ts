@@ -1,18 +1,16 @@
-import { writeFile, readFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import * as Sentry from '@sentry/nextjs';
+import { readFile, mkdir, rename, writeFile, rm } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import path from 'path';
+import type Redis from 'ioredis';
 
-interface ChangelogEntry {
+export interface ChangelogEntry {
   aiSummary: string;
   author: string;
   categories: string[];
   commitId: string;
   description: string;
-  filesChanged: {
-    added: string[];
-    modified: string[];
-    removed: string[];
-  };
+  filesChanged: { added: string[]; modified: string[]; removed: string[] };
   id: string;
   publishedAt: string;
   source: 'changelog' | 'docs';
@@ -20,117 +18,123 @@ interface ChangelogEntry {
   url: string;
 }
 
-const CHANGELOG_FILE = path.join(process.cwd(), 'data', 'docs-changelog.json');
 const KV_KEY = 'docs-changelog';
+const changelogFile = () => path.join(process.cwd(), 'data', 'docs-changelog.json');
+let redisConnection: Promise<Redis> | undefined;
 
-// Lazy load Redis client
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let redisClient: any = null;
-
-async function getRedisClient() {
-  if (redisClient) return redisClient;
-  
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    throw new Error('REDIS_URL not found in environment');
-  }
-  
-  try {
-    const Redis = (await import('ioredis')).default;
-    redisClient = new Redis(redisUrl, {
-      tls: redisUrl.startsWith('rediss://') ? {} : undefined,
-      maxRetriesPerRequest: 3,
-      lazyConnect: true,
-    });
-    
-    await redisClient.connect();
-    return redisClient;
-  } catch (error) {
-    console.error('Failed to connect to Redis:', error);
-    throw error;
-  }
+function usesRedis() {
+  if (process.env.REDIS_URL) return true;
+  if (process.env.VERCEL) throw new Error('REDIS_URL is required on Vercel');
+  return false;
 }
 
-/**
- * Save a changelog entry to persistent storage
- * Uses Vercel KV in production, local file in development
- */
-export async function saveChangelogEntry(entry: ChangelogEntry): Promise<void> {
-  try {
-    // Get existing entries
-    const existingEntries = await getChangelogEntries();
-    
-    // Check if entry already exists (deduplicate)
-    const existingIndex = existingEntries.findIndex(e => e.id === entry.id);
-    if (existingIndex !== -1) {
-      console.log(`Changelog entry ${entry.id} already exists, updating...`);
-      existingEntries[existingIndex] = entry;
-    } else {
-      // Add new entry at the beginning (most recent first)
-      existingEntries.unshift(entry);
-    }
-    
-    // Keep only the last 100 entries
-    const limitedEntries = existingEntries.slice(0, 100);
-    
-    // Save to storage
-    if (isProduction()) {
-      // Use Vercel KV (Redis) in production
-      const redis = await getRedisClient();
-      await redis.set(KV_KEY, JSON.stringify(limitedEntries));
-      console.log(`Saved changelog entry ${entry.id} to Vercel KV`);
-    } else {
-      // Use file system in development
-      const dataDir = path.dirname(CHANGELOG_FILE);
-      if (!existsSync(dataDir)) {
-        await mkdir(dataDir, {recursive: true});
+export async function getRedisClient(): Promise<Redis> {
+  if (!redisConnection) {
+    redisConnection = (async () => {
+      const { default: RedisClient } = await import('ioredis');
+      const client = new RedisClient(process.env.REDIS_URL!, {
+        maxRetriesPerRequest: 3,
+        lazyConnect: true,
+        connectTimeout: 10000,
+      });
+      client.on('error', () => { /* Errors are handled by the awaited operation. */ });
+      try {
+        await client.connect();
+        return client;
+      } catch (error) {
+        client.disconnect();
+        throw error;
       }
-      await writeFile(CHANGELOG_FILE, JSON.stringify(limitedEntries, null, 2));
-      console.log(`Saved changelog entry ${entry.id} to local file`);
-    }
+    })().catch(error => {
+      redisConnection = undefined;
+      throw error;
+    });
+  }
+  return redisConnection;
+}
+
+function parseEntries(data: string): ChangelogEntry[] {
+  const entries: unknown = JSON.parse(data);
+  if (!Array.isArray(entries) || entries.some(entry =>
+    !entry || typeof entry.id !== 'string' || typeof entry.publishedAt !== 'string' ||
+    !Number.isFinite(Date.parse(entry.publishedAt)))) {
+    throw new Error('Invalid changelog storage');
+  }
+  return entries;
+}
+
+async function readLocalEntries(): Promise<ChangelogEntry[]> {
+  try {
+    return parseEntries(await readFile(changelogFile(), 'utf8'));
   } catch (error) {
-    console.error('Error saving changelog entry:', error);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
 }
 
-/**
- * Get all changelog entries from storage
- */
+// Compare-and-set preserves the existing JSON key and retries competing writers.
+const COMPARE_AND_SET = `
+if (redis.call('GET', KEYS[1]) or '') ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2])
+return 1
+`;
+
+function mergeEntry(entries: ChangelogEntry[], entry: ChangelogEntry) {
+  return [...entries.filter(old => old.id !== entry.id), entry]
+    .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
+    .slice(0, 100);
+}
+
+export async function saveChangelogEntry(entry: ChangelogEntry): Promise<void> {
+  // Reject invalid timestamps before attempting any write.
+  entry = { ...entry, publishedAt: new Date(entry.publishedAt).toISOString() };
+  if (usesRedis()) {
+    const redis = await getRedisClient();
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const raw = await redis.get(KV_KEY);
+      const updated = mergeEntry(raw === null ? [] : parseEntries(raw), entry);
+      if (await redis.eval(COMPARE_AND_SET, 1, KV_KEY, raw ?? '', JSON.stringify(updated)) === 1) return;
+    }
+    throw new Error('Changelog write contention; retry delivery');
+  }
+
+  const file = changelogFile();
+  await mkdir(path.dirname(file), { recursive: true });
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + 10000;
+  // mkdir is exclusive across processes; never steal a possibly live writer's lock.
+  for (;;) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) throw new Error('Changelog storage is locked; retry after the writer finishes');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    const entries = await readLocalEntries();
+    const updated = mergeEntry(entries, entry);
+    await writeFile(temporary, JSON.stringify(updated, null, 2));
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+    await rm(lock, { recursive: true });
+  }
+}
+
 export async function getChangelogEntries(): Promise<ChangelogEntry[]> {
   try {
-    if (isProduction()) {
-      // Use Vercel KV (Redis) in production
-      const redis = await getRedisClient();
-      const data = await redis.get(KV_KEY);
-      const entries = data ? JSON.parse(data) : [];
-      console.log(`Loaded ${entries?.length || 0} changelog entries from Vercel KV`);
-      return entries || [];
-    } else {
-      // Use file system in development
-      if (!existsSync(CHANGELOG_FILE)) {
-        console.log('No local changelog file found');
-        return [];
-      }
-      const fileContent = await readFile(CHANGELOG_FILE, 'utf-8');
-      const entries = JSON.parse(fileContent);
-      console.log(`Loaded ${entries.length} changelog entries from local file`);
-      return entries;
+    if (usesRedis()) {
+      const raw = await (await getRedisClient()).get(KV_KEY);
+      return raw === null ? [] : parseEntries(raw);
     }
+    return await readLocalEntries();
   } catch (error) {
-    console.error('Error loading changelog entries:', error);
-    return [];
+    Sentry.captureException(error);
+    Sentry.logger.error('Documentation changelog storage read failed');
+    throw error;
   }
 }
-
-/**
- * Check if we're running in production (Vercel)
- */
-function isProduction(): boolean {
-  const isVercel = !!process.env.VERCEL;
-  const isProd = process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production';
-  const result = isVercel && isProd;
-  console.log('isProduction check:', {isVercel, isProd, result, VERCEL_ENV: process.env.VERCEL_ENV, NODE_ENV: process.env.NODE_ENV});
-  return result;
-}
-
