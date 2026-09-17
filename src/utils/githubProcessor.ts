@@ -98,17 +98,33 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
     // Trust GitHub's commit data, not caller-supplied titles, links, authors, or dates.
     const data = commitDetails.data;
     const files = data.files || [];
+    const docFiles = files.filter((file: { filename: string }) =>
+      file.filename.endsWith('.md') || file.filename.endsWith('.mdx') ||
+      file.filename.includes('/docs/') || file.filename.includes('/documentation/'));
+    if (!docFiles.length) return false;
+    const validDate = (...dates: unknown[]) => dates.find((date): date is string =>
+      typeof date === 'string' && Number.isFinite(Date.parse(date)));
+    let timestamp = validDate(data.commit.author?.date, data.commit.committer?.date);
+    if (!timestamp) {
+      // The repository endpoint permits nullable git-user metadata. The Git object
+      // endpoint provides the authoritative dates; never label old content as new.
+      const { data: gitCommit } = await octokitClient.rest.git.getCommit({
+        owner: 'getsentry', repo: 'sentry-docs', commit_sha: input.id,
+      });
+      if (gitCommit.sha !== data.sha) throw new Error('Canonical commit SHA mismatch');
+      timestamp = validDate(gitCommit.author?.date, gitCommit.committer?.date);
+    }
+    if (!timestamp) throw new Error('Commit has no valid canonical timestamp');
     const commit: Commit = {
       id: data.sha,
       message: data.commit.message,
-      timestamp: data.commit.author?.date || data.commit.committer?.date,
+      timestamp,
       url: data.html_url,
       author: { name: data.commit.author?.name || 'Unknown', email: '' },
       added: files.filter((f: { status: string }) => f.status === 'added').map((f: { filename: string }) => f.filename),
       removed: files.filter((f: { status: string }) => f.status === 'removed').map((f: { filename: string }) => f.filename),
       modified: files.filter((f: { status: string }) => !['added', 'removed'].includes(f.status)).map((f: { filename: string }) => f.filename),
     };
-    if (!Number.isFinite(Date.parse(commit.timestamp))) throw new Error('Commit has no valid timestamp');
 
     const totalFiles = commitDetails.data.files?.length || 0;
     console.log(`Commit has ${totalFiles} total files changed`);
@@ -117,21 +133,6 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
     if (totalFiles > 0 && commitDetails.data.files) {
       const sampleFiles = commitDetails.data.files.slice(0, 3).map((f: {filename: string}) => f.filename);
       console.log(`Sample files: ${sampleFiles.join(', ')}`);
-    }
-
-    // Filter for documentation files only
-    const docFiles = commitDetails.data.files?.filter((file: { filename: string }) => 
-      file.filename.endsWith('.md') || 
-      file.filename.endsWith('.mdx') ||
-      file.filename.includes('/docs/') ||
-      file.filename.includes('/documentation/')
-    ) || [];
-
-    console.log(`Found ${docFiles.length} documentation files`);
-    
-    if (docFiles.length === 0) {
-      console.log('No documentation files changed in this commit');
-      return false;
     }
 
     // Generate AI summary of changes

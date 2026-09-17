@@ -139,3 +139,8 @@ against known feed URLs and Atom base URLs. Invalid links/dates are isolated and
 reported, valid entries survive, and an entirely invalid feed still fails closed.
 Two additional parsing regressions pass, including assertions for skip telemetry;
 lint and the production build pass after this change.
+
+Missing repository commit dates now fall back to GitHub's canonical Git commit
+object, with SHA matching and valid-date checks. Historical dates are preserved;
+non-documentation commits skip date recovery. Four new regressions cover nullable
+metadata, committer fallback, corrupt/mismatched objects, and irrelevant commits.
