@@ -26,11 +26,7 @@ interface YouTubeAPIResponse {
       title: string;
       description: string;
       publishedAt: string;
-      thumbnails: {
-        medium: {
-          url: string;
-        };
-      };
+      thumbnails?: Partial<Record<'medium' | 'default' | 'high', { url?: string }>>;
     };
   }>;
 }
@@ -70,7 +66,7 @@ export async function load(previous?: SourceSnapshot): Promise<SourcePayload> {
         url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
         publishedAt: item.snippet.publishedAt,
         source: 'youtube',
-        thumbnail: item.snippet.thumbnails.medium.url,
+        thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || item.snippet.thumbnails?.high?.url,
         categories,
       };
     });
