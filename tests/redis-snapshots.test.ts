@@ -38,3 +38,37 @@ test('an expired lease cannot overwrite a newer writer or release its lock', asy
   expect(redis.data.get('content:v1:blog:lock')).toBe('new-owner');
   expect(redis.data.has('content:v1:blog')).toBe(false);
 });
+
+test('waiting workers reuse a slow owner result instead of starting another fetch', async () => {
+  vi.useFakeTimers();
+  try {
+    redis.data.set('content:v1:blog:lock', 'owner');
+    const load = vi.fn();
+    const result = redisSnapshots.refresh('blog', undefined, load);
+    await vi.advanceTimersByTimeAsync(5000);
+    redis.data.set('content:v1:blog', JSON.stringify({ items: [], fetchedAt: Date.now() }));
+    await vi.advanceTimersByTimeAsync(101);
+    expect((await result).items).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+test('an expired competing lease cannot start a new fetch after the acquisition budget', async () => {
+  vi.useFakeTimers();
+  try {
+    redis.data.set('content:v1:blog:lock', 'owner');
+    const load = vi.fn();
+    const result = redisSnapshots.refresh('blog', undefined, load);
+    const rejection = expect(result).rejects.toThrow('busy');
+    await vi.advanceTimersByTimeAsync(3000);
+    redis.data.delete('content:v1:blog:lock');
+    await vi.advanceTimersByTimeAsync(15100);
+    await rejection;
+    expect(load).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+test('unlock failure does not hide an upstream failure', async () => {
+  redis.eval.mockRejectedValueOnce(Error('unlock failure'));
+  await expect(redisSnapshots.refresh('blog', undefined, async () => {
+    throw Error('upstream failure');
+  })).rejects.toThrow('upstream failure');
+});

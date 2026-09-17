@@ -4,6 +4,7 @@ export interface DashboardContent {
   items: ContentItem[];
   failedSources: ContentSource[];
   pendingSources: ContentSource[];
+  deferredSources: ContentSource[];
 }
 export async function loadDashboardContent(
   signal: AbortSignal,
@@ -15,10 +16,11 @@ export async function loadDashboardContent(
     bySource.set(source, (options.initialItems || []).filter(item => item.source === source));
   }
   const failed = new Set<ContentSource>();
+  const deferred = new Set<ContentSource>();
   const pending = new Set<ContentSource>(CONTENT_SOURCES);
   const result = () => ({
     items: [...bySource.values()].flat().sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)),
-    failedSources: [...failed], pendingSources: [...pending],
+    failedSources: [...failed], pendingSources: [...pending], deferredSources: [...deferred],
   });
   const response = await fetch(`/api/content${options.refresh === false ? '' : '?refresh=1'}`, {
     cache: 'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(25000)]),
@@ -36,7 +38,11 @@ export async function loadDashboardContent(
     if (event.type === 'source') {
       if (!Array.isArray(event.snapshot?.items)) throw new Error('Invalid content snapshot');
       bySource.set(event.source, event.snapshot.items);
-      if (!event.refreshing) pending.delete(event.source);
+      if (!event.refreshing) {
+        pending.delete(event.source);
+        if (event.snapshot.refreshDeferredUntil) deferred.add(event.source);
+        else deferred.delete(event.source);
+      }
     } else if (event.type === 'error') {
       failed.add(event.source);
       pending.delete(event.source);

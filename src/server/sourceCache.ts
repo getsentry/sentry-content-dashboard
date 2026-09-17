@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { RefreshCoordinationError, RefreshDeferredError } from './cacheErrors';
 import { normalizeContent, type ContentSource, type SourcePayload, type SourceSnapshot } from '../utils/content';
 
 export const SOURCE_FRESHNESS_MS = 30000;
@@ -14,25 +15,37 @@ export class SourceCache {
   private snapshots = new Map<ContentSource, SourceSnapshot>();
   private inFlight = new Map<ContentSource, Promise<SourceSnapshot>>();
   private storeUnavailableUntil = 0;
+  private reads = new Map<ContentSource, Promise<SourceSnapshot | undefined>>();
   private failures = new Map<ContentSource, number>();
   constructor(private loaders: Record<ContentSource, Loader>, private store?: SnapshotStore) {}
 
+  private remember(source: ContentSource, snapshot: SourceSnapshot) {
+    const current = this.snapshots.get(source);
+    if (!current || snapshot.fetchedAt >= current.fetchedAt) this.snapshots.set(source, snapshot);
+    return this.snapshots.get(source)!;
+  }
+
   async read(source: ContentSource) {
-    let snapshot = this.snapshots.get(source);
     if (this.store && Date.now() >= this.storeUnavailableUntil) {
+      let read = this.reads.get(source);
+      if (!read) {
+        read = this.store.read(source).then(stored => {
+          if (stored) this.remember(source, stored);
+          return stored;
+        }, () => {
+          this.storeUnavailableUntil = Date.now() + 15000;
+          Sentry.logger.warn('Content snapshot cache unavailable; using worker cache');
+          return undefined;
+        }).finally(() => this.reads.delete(source));
+        this.reads.set(source, read);
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const stored = await Promise.race([
-          this.store.read(source),
-          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Snapshot cache timed out')), 400); }),
-        ]);
-        if (stored) { snapshot = stored; this.snapshots.set(source, stored); }
-      } catch {
-        // An optional snapshot cache must not take healthy external feeds offline.
-        this.storeUnavailableUntil = Date.now() + 15000;
-        Sentry.logger.warn('Content snapshot cache unavailable; using worker cache');
+        // A soft display deadline is not a Redis outage. Late results warm the cache.
+        await Promise.race([read, new Promise<void>(resolve => { timer = setTimeout(resolve, 400); })]);
       } finally { clearTimeout(timer); }
     }
+    const snapshot = this.snapshots.get(source);
     return snapshot && Date.now() - snapshot.fetchedAt < SNAPSHOT_MAX_AGE_MS ? snapshot : undefined;
   }
 
@@ -63,15 +76,23 @@ export class SourceCache {
         try { snapshot = await this.store.refresh(source, previous, load); }
         catch (error) {
           if (upstreamFailed) throw error;
-          this.storeUnavailableUntil = Date.now() + 15000;
-          Sentry.logger.warn('Content snapshot write unavailable; using worker cache');
+          if (error instanceof RefreshCoordinationError) {
+            // Never bypass another owner's lease with an uncoordinated fetch.
+            if (!loaded) throw error;
+          } else {
+            this.storeUnavailableUntil = Date.now() + 15000;
+            Sentry.logger.warn('Content snapshot write unavailable; using worker cache');
+          }
           snapshot = loaded ?? await load();
         }
       } else snapshot = await load();
-      this.snapshots.set(source, snapshot);
       this.failures.delete(source);
-      return snapshot;
+      return this.remember(source, snapshot);
     } catch (error) {
+      if (error instanceof RefreshDeferredError) {
+        if (previous) return { ...previous, refreshDeferredUntil: error.retryAt };
+        throw error;
+      }
       this.failures.set(source, Date.now() + 15000);
       throw error;
     }

@@ -1,3 +1,4 @@
+import { reserveYouTubeRefresh } from '../youtubeQuota';
 import { fetchFeed, validators } from '../fetchFeed';
 import type { SourcePayload, SourceSnapshot } from '../../utils/content';
 import { subDays, parseISO } from 'date-fns';
@@ -61,6 +62,7 @@ export async function load(previous?: SourceSnapshot): Promise<SourcePayload> {
     console.log('Fetching from YouTube API:', apiUrl.replace(config.youtube.apiKey, '[API_KEY_HIDDEN]'));
 
     // Fetch videos from Sentry's YouTube channel
+    await reserveYouTubeRefresh();
     const response = await fetchFeed(apiUrl, previous);
 
     if (response.status === 304 && previous) return previous;

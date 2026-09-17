@@ -67,3 +67,57 @@ test('shared-cache write failure still returns fresh upstream data without fetch
   expect((await cache.refresh('blog')).items[0].title).toBe('Available');
   expect(load).toHaveBeenCalledOnce();
 });
+
+test('slow shared read keeps coordination enabled and late results cannot replace newer data', async () => {
+  vi.useFakeTimers();
+  let finish!: (value: import('../src/utils/content').SourceSnapshot) => void;
+  const store: SnapshotStore = { read: vi.fn(() => new Promise(resolve => { finish = resolve; })),
+    refresh: vi.fn(async (_source, _previous, load) => load()) };
+  const cache = new SourceCache(loaders(async () => ({ items: [item('New')] })), store);
+  const reading = cache.read('blog');
+  await vi.advanceTimersByTimeAsync(401); await reading;
+  const refreshing = cache.refresh('blog', true);
+  await vi.advanceTimersByTimeAsync(401);
+  const fresh = await refreshing;
+  expect(store.refresh).toHaveBeenCalledOnce();
+  finish({ items: [], fetchedAt: fresh.fetchedAt - 1 });
+  await vi.advanceTimersByTimeAsync(1);
+  const result = cache.read('blog');
+  await vi.advanceTimersByTimeAsync(401);
+  expect((await result)?.items[0].title).toBe('New');
+});
+test('a late Redis rejection is handled and healthy loaders still work', async () => {
+  vi.useFakeTimers();
+  const store: SnapshotStore = { read: () => new Promise((_resolve, reject) => setTimeout(() => reject(Error('late Redis failure')), 500)), refresh: vi.fn() };
+  const cache = new SourceCache(loaders(async () => ({ items: [item('Available')] })), store);
+  const reading = cache.read('blog');
+  await vi.advanceTimersByTimeAsync(501); await reading;
+  expect((await cache.refresh('blog')).items[0].title).toBe('Available');
+});
+test('lease loss does not disable another source and contention never bypasses its owner', async () => {
+  const { RefreshCoordinationError } = await import('../src/server/cacheErrors');
+  const load = vi.fn(async () => ({ items: [item('Fresh')] }));
+  const store: SnapshotStore = { read: async () => undefined, refresh: vi.fn(async (source, _previous, refresh) => {
+    if (source === 'changelog') throw new RefreshCoordinationError('busy');
+    const value = await refresh();
+    if (source === 'blog') throw new RefreshCoordinationError('lease expired');
+    return value;
+  }) };
+  const cache = new SourceCache(loaders(load), store);
+  await cache.refresh('blog'); await cache.refresh('docs');
+  await expect(cache.refresh('changelog')).rejects.toThrow('busy');
+  expect(store.refresh).toHaveBeenCalledTimes(3);
+  expect(load).toHaveBeenCalledTimes(2);
+});
+test('deferred refresh retains original freshness timestamp and does not poison other sources', async () => {
+  const { RefreshDeferredError } = await import('../src/server/cacheErrors');
+  const load = vi.fn().mockResolvedValue({ items: [item('Saved')] });
+  const cache = new SourceCache(loaders(load));
+  const original = await cache.refresh('youtube');
+  load.mockRejectedValue(new RefreshDeferredError(Date.now() + 10000));
+  const deferred = await cache.refresh('youtube', true);
+  expect(deferred.fetchedAt).toBe(original.fetchedAt);
+  expect(deferred.refreshDeferredUntil).toBeGreaterThan(Date.now());
+  load.mockResolvedValue({ items: [item('New')] });
+  expect((await cache.refresh('youtube', true)).items[0].title).toBe('New');
+});

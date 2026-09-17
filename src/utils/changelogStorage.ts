@@ -33,9 +33,11 @@ export async function getRedisClient(): Promise<Redis> {
     redisConnection = (async () => {
       const { default: RedisClient } = await import('ioredis');
       const client = new RedisClient(process.env.REDIS_URL!, {
-        maxRetriesPerRequest: 3,
+        maxRetriesPerRequest: 1,
+        commandTimeout: 1000,
+        enableOfflineQueue: false,
         lazyConnect: true,
-        connectTimeout: 10000,
+        connectTimeout: 1500,
       });
       client.on('error', () => { /* Errors are handled by the awaited operation. */ });
       try {
@@ -114,14 +116,23 @@ export async function saveChangelogEntry(entry: ChangelogEntry): Promise<void> {
     }
   }
   const temporary = `${file}.${randomUUID()}.tmp`;
+  let writeFailed = false;
   try {
     const entries = await readLocalEntries();
     const updated = mergeEntry(entries, entry);
     await writeFile(temporary, JSON.stringify(updated, null, 2));
     await rename(temporary, file);
+  } catch (error) {
+    writeFailed = true;
+    throw error;
   } finally {
-    await rm(temporary, { force: true });
-    await rm(lock, { recursive: true });
+    // Always attempt both cleanups, without replacing the primary write error.
+    const cleanup = await Promise.allSettled([
+      rm(temporary, { force: true }), rm(lock, { recursive: true }),
+    ]);
+    const errors = cleanup.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    errors.forEach(error => Sentry.captureException(error));
+    if (errors.length && !writeFailed) throw new AggregateError(errors, 'Changelog cleanup failed');
   }
 }
 

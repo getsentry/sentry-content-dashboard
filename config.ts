@@ -56,7 +56,7 @@ export const config = {
 // Debug logging
 console.log('Config loaded - YouTube API key present:', !!config.youtube.apiKey);
 console.log('Environment variables:', {
-  YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY ? `${process.env.YOUTUBE_API_KEY.substring(0, 10)}...` : 'undefined',
+  hasYouTubeApiKey: !!process.env.YOUTUBE_API_KEY,
   NODE_ENV: process.env.NODE_ENV,
 });
 

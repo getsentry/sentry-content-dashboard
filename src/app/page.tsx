@@ -37,6 +37,7 @@ export default function Home() {
   const [pendingSources, setPendingSources] = useState<ContentSource[]>([]);
   const currentContent = useRef<ContentItem[]>([]);
   const lastRefresh = useRef(0);
+  const [deferredSources, setDeferredSources] = useState<ContentSource[]>([]);
   const [failedSources, setFailedSources] = useState<ContentSource[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'blog' | 'youtube' | 'docs' | 'changelog'>('all');
@@ -64,6 +65,7 @@ export default function Home() {
           currentContent.current = progress.items;
           setContent(progress.items);
           setFailedSources(progress.failedSources);
+          setDeferredSources(progress.deferredSources);
           setPendingSources(progress.pendingSources);
           if (progress.items.length || !progress.pendingSources.length) {
             setLoading(false);
@@ -76,6 +78,7 @@ export default function Home() {
         }, { refresh: !background, initialItems: currentContent.current }));
       if (controller.signal.aborted) return;
       setFailedSources(result.failedSources);
+      setDeferredSources(result.deferredSources);
       if (result.failedSources.length === 4 && !result.items.length) throw new Error('All content sources are unavailable');
       setError(null);
       currentContent.current = result.items;
@@ -238,6 +241,11 @@ export default function Home() {
         <div role="status" className="p-4 text-center text-yellow-200 bg-yellow-950">
           Showing available content. Could not refresh: {failedSources.join(', ')}.
           <button className="ml-3 underline" onClick={() => void fetchContent()}>Retry sources</button>
+        </div>
+      )}
+      {deferredSources.length > 0 && (
+        <div role="status" className="p-3 text-center text-cyan-200">
+          Showing saved {deferredSources.join(', ')} content. Refresh deferred to protect the source quota.
         </div>
       )}
       {/* Header */}

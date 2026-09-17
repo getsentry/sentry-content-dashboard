@@ -60,3 +60,16 @@ test('handles records split across chunks including multibyte text', async () =>
   } }))));
   expect((await loadDashboardContent(new AbortController().signal)).items.every(item => item.title === 'Fresh 🎉')).toBe(true);
 });
+
+test('quota deferral preserves saved content and settles pending status', async () => {
+  const youtube = event('youtube', 'Saved');
+  if (youtube.type === 'source') youtube.snapshot.refreshDeferredUntil = Date.now() + 10000;
+  vi.stubGlobal('fetch', vi.fn(async () => stream([
+    youtube, ...(['blog', 'docs', 'changelog'] as const).map(source => event(source)), { type: 'done' },
+  ])));
+  const result = await loadDashboardContent(new AbortController().signal);
+  expect(result.deferredSources).toEqual(['youtube']);
+  expect(result.pendingSources).toEqual([]);
+  expect(result.failedSources).toEqual([]);
+  expect(result.items.find(item => item.source === 'youtube')?.title).toBe('Saved');
+});
