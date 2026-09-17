@@ -223,7 +223,9 @@ YouTube is reported unavailable while healthy sources continue loading.
 
 RSS/Atom parsing uses a shared server-only XML/HTML parser. Each representation is
 decoded once, React renders extracted content as text, and exports escape text at
-the Markdown boundary. Literal code examples remain readable.
+the Markdown boundary. Literal code examples remain readable. Relative links resolve against the known
+feed location and Atom base URLs. Invalid items are skipped and reported to Sentry;
+an entirely invalid feed fails instead of replacing saved content with an empty list.
 
 Run `npm test`, `npm run lint`, and `npm run build` before publication. The Validate
 workflow runs these on PRs with an isolated Redis service. To include real-Redis

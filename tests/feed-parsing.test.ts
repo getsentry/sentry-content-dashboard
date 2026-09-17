@@ -1,4 +1,6 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
+import * as Sentry from '@sentry/nextjs';
+afterEach(() => vi.clearAllMocks());
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { parseFeed } from '../src/server/parseFeed';
@@ -32,4 +34,19 @@ test('malformed nested tags do not become active HTML through text rendering or 
 test('invalid feed envelopes fail instead of publishing an empty success', () => {
   expect(() => parseFeed('<html>upstream error</html>', 'blog')).toThrow('Invalid RSS/Atom');
   expect(parseFeed('<rss><channel/></rss>', 'blog')).toEqual([]);
+});
+
+test('relative feed links resolve against the source and Atom xml:base', () => {
+  const relative = '<rss><channel><item><title>Relative</title><link>/new-post/</link></item></channel></rss>';
+  expect(parseFeed(relative, 'blog')[0].url).toBe('https://blog.sentry.io/new-post/');
+  const atom = '<feed xml:base="https://example.com/updates/"><entry xml:base="v2/"><title>Release</title><link href="new"/></entry></feed>';
+  expect(parseFeed(atom, 'changelog')[0].url).toBe('https://example.com/updates/v2/new');
+});
+test('bad links or dates cannot hide healthy entries, but an entirely invalid feed fails', () => {
+  const valid = '<item><title>Healthy</title><link>https://example.com/good</link><pubDate>2026-09-17</pubDate></item>';
+  const bad = '<item><title>Bad URL</title><link>http://[broken</link></item><item><title>Bad date</title><link>https://example.com/date</link><pubDate>invalid-date</pubDate></item><item><title>Unsafe</title><link>javascript:alert(1)</link></item>';
+  expect(parseFeed(`<rss><channel>${bad}${valid}</channel></rss>`, 'blog').map(item => item.title)).toEqual(['Healthy']);
+  expect(Sentry.logger.warn).toHaveBeenCalledWith('Skipped invalid feed entries', { source: 'blog', count: 3 });
+  expect(Sentry.captureException).toHaveBeenCalledOnce();
+  expect(() => parseFeed(`<rss><channel>${bad}</channel></rss>`, 'blog')).toThrow('no valid entries');
 });

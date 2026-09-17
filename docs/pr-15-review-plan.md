@@ -133,3 +133,9 @@ observed snapshot into loaders for conditional validators and quota fallback;
 deferral also checks for a late-published snapshot. Partial stream timeout and
 protocol errors now report their underlying exception to Sentry while retaining
 delivered content. Intentional cancellation remains unreported.
+
+The next review identified per-item feed failures. Relative links now resolve
+against known feed URLs and Atom base URLs. Invalid links/dates are isolated and
+reported, valid entries survive, and an entirely invalid feed still fails closed.
+Two additional parsing regressions pass, including assertions for skip telemetry;
+lint and the production build pass after this change.
