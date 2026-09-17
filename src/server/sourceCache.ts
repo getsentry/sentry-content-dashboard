@@ -7,7 +7,7 @@ export const SNAPSHOT_MAX_AGE_MS = 86400000;
 type Loader = (previous?: SourceSnapshot) => Promise<SourcePayload>;
 export interface SnapshotStore {
   read(source: ContentSource): Promise<SourceSnapshot | undefined>;
-  refresh(source: ContentSource, previous: SourceSnapshot | undefined, load: () => Promise<SourceSnapshot>, requestedAt?: number): Promise<SourceSnapshot>;
+  refresh(source: ContentSource, previous: SourceSnapshot | undefined, load: (observed?: SourceSnapshot) => Promise<SourceSnapshot>, minimumFetchedAt?: number): Promise<SourceSnapshot>;
 }
 
 // Shared by API reads, streamed dashboard loads, and exports in each worker.
@@ -59,12 +59,17 @@ export class SourceCache {
 
   private async update(source: ContentSource, force: boolean, requestedAt: number) {
     if ((this.failures.get(source) || 0) > Date.now()) throw new Error(`${source} temporarily unavailable`);
-    const previous = await this.read(source);
+    let previous = await this.read(source);
+    const minimumFetchedAt = force || source === 'docs' ? requestedAt : requestedAt - SOURCE_FRESHNESS_MS;
     if (source !== 'docs' && !force && previous && Date.now() - previous.fetchedAt < SOURCE_FRESHNESS_MS) return previous;
     try {
       let loaded: SourceSnapshot | undefined;
       let upstreamFailed = false;
-      const load = async () => {
+      const load = async (observed?: SourceSnapshot) => {
+        // Shared coordination may see a snapshot after our soft read deadline.
+        // Carry it into conditional requests and quota fallback, without extending its age.
+        if (observed && Date.now() - observed.fetchedAt < SNAPSHOT_MAX_AGE_MS &&
+            (!previous || observed.fetchedAt >= previous.fetchedAt)) previous = observed;
         try {
           const payload = await this.loaders[source](previous);
           // Persist source data only; response-only deferral/busy flags are never cached.
@@ -75,7 +80,7 @@ export class SourceCache {
       };
       let snapshot: SourceSnapshot;
       if (this.store && Date.now() >= this.storeUnavailableUntil) {
-        try { snapshot = await this.store.refresh(source, previous, load, requestedAt); }
+        try { snapshot = await this.store.refresh(source, previous, load, minimumFetchedAt); }
         catch (error) {
           if (upstreamFailed) throw error;
           if (error instanceof RefreshCoordinationError) {
@@ -94,12 +99,13 @@ export class SourceCache {
       if (error instanceof RefreshCoordinationError) {
         // Busy is not an upstream failure: read the owner result and allow immediate retry.
         const latest = await this.read(source);
-        if (latest && latest.fetchedAt >= requestedAt && (!previous || latest.fetchedAt > previous.fetchedAt)) return latest;
+        if (latest && latest.fetchedAt >= minimumFetchedAt) return latest;
         if (latest || previous) return { ...(latest || previous)!, refreshBusy: true };
         throw error;
       }
       if (error instanceof RefreshDeferredError) {
-        if (previous) return { ...previous, refreshDeferredUntil: error.retryAt };
+        const saved = await this.read(source) || previous;
+        if (saved) return { ...saved, refreshDeferredUntil: error.retryAt };
         throw error;
       }
       this.failures.set(source, Date.now() + 15000);

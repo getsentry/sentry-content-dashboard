@@ -21,23 +21,24 @@ export const redisSnapshots: SnapshotStore = {
     if (!Number.isFinite(value.fetchedAt)) throw new Error('Invalid content snapshot timestamp');
     return { ...value, items: normalizeContent(value.items, source) };
   },
-  async refresh(source, previous, load, requestedAt = Date.now()) {
+  async refresh(source, previous, load, minimumFetchedAt = Date.now()) {
     const redis = await getRedisClient();
     const lock = `${key(source)}:lock`;
     const token = randomUUID();
     const acquireDeadline = Date.now() + 2500;
     const deadline = Date.now() + 18000;
+    let observed = previous;
     for (;;) {
       if (Date.now() >= deadline) throw new RefreshCoordinationError('Content refresh busy; retry shortly');
       const current = await this.read(source);
-      if (current && current.fetchedAt >= requestedAt &&
-          (!previous || current.fetchedAt > previous.fetchedAt)) return current;
+      if (current) observed = current;
+      if (current && current.fetchedAt >= minimumFetchedAt) return current;
       // Wait for an existing owner, but never start a 15s fetch after a long wait.
       if (Date.now() < acquireDeadline && await redis.set(lock, token, 'PX', 18000, 'NX')) break;
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     try {
-      const snapshot: SourceSnapshot = await load();
+      const snapshot: SourceSnapshot = await load(observed);
       if (await redis.eval(SAVE, 2, lock, key(source), token, JSON.stringify(snapshot)) !== 1) {
         throw new RefreshCoordinationError('Content refresh lease expired');
       }

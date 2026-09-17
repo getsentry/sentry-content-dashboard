@@ -167,3 +167,16 @@ test('successful conditional refresh strips response-only status and deferrals a
   expect(refreshed.etag).toBe('version-1');
   expect(refreshed.items).toEqual(original.items);
 });
+
+test('store-observed snapshot supplies validators and quota fallback after a missed initial read', async () => {
+  const { RefreshDeferredError } = await import('../src/server/cacheErrors');
+  const saved = { items: normalizeForTest('Saved video'), fetchedAt: Date.now() - 10000, etag: 'saved' };
+  const store: SnapshotStore = { read: async () => undefined, refresh: async (_source, _previous, load) => load(saved) };
+  const loader = vi.fn(async () => { throw new RefreshDeferredError(Date.now() + 10000); });
+  const cache = new SourceCache(loaders(loader), store);
+  const result = await cache.refresh('youtube', true);
+  expect(result.items[0].title).toBe('Saved video');
+  expect(result.fetchedAt).toBe(saved.fetchedAt);
+  expect(result.refreshDeferredUntil).toBeDefined();
+  expect(loader).toHaveBeenCalledExactlyOnceWith(saved);
+});

@@ -54,3 +54,25 @@ test.skipIf(!url)('slow cold read still revalidates a pre-existing Redis snapsho
   expect((await cache.refresh('blog', true)).items[0].title).toBe('New on first visit');
   expect(load).toHaveBeenCalledOnce();
 });
+
+test.skipIf(!url)('slow background read reuses warm Redis data while forced deferral retains it', async () => {
+  const { RefreshDeferredError } = await import('../src/server/cacheErrors');
+  await shared.redis.del('content:v1:blog:lock');
+  const saved = { items: [{ id: 'saved', source: 'blog', title: 'Saved content', description: '', categories: [], url: 'https://example.com', publishedAt: '2026-09-17' }], etag: 'saved-version', fetchedAt: Date.now() - 10000 };
+  await shared.redis.set('content:v1:blog', JSON.stringify(saved));
+  const slowStore = { ...redisSnapshots, read: async (source: Parameters<typeof redisSnapshots.read>[0]) => {
+    await new Promise(resolve => setTimeout(resolve, 650));
+    return redisSnapshots.read(source);
+  } };
+  const load = vi.fn(async () => { throw new RefreshDeferredError(Date.now() + 10000); });
+  const loaders = { blog: load, docs: load, youtube: load, changelog: load };
+  const background = new SourceCache(loaders, slowStore);
+  expect((await background.refresh('blog')).items[0].title).toBe('Saved content');
+  expect(load).not.toHaveBeenCalled();
+  const firstVisit = new SourceCache(loaders, slowStore);
+  const deferred = await firstVisit.refresh('blog', true);
+  expect(deferred.items[0].title).toBe('Saved content');
+  expect(deferred.fetchedAt).toBe(saved.fetchedAt);
+  expect(deferred.refreshDeferredUntil).toBeGreaterThan(Date.now());
+  expect(load).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ etag: 'saved-version' }));
+});
