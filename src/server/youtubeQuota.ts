@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import * as Sentry from '@sentry/nextjs';
 import { getRedisClient } from '../utils/changelogStorage';
-import { RefreshDeferredError } from './cacheErrors';
+import { RefreshDeferredError, YouTubeAdmissionUnavailableError } from './cacheErrors';
 
 const DAY_MS = 86400000;
 const KEY = 'content:v1:youtube:admission';
@@ -54,10 +54,10 @@ export async function reserveYouTubeRefresh() {
     } catch (error) {
       Sentry.captureException(error);
       // Shared admission is mandatory when configured: an outage cannot bypass it.
-      throw new RefreshDeferredError(Date.now() + 15000);
+      throw new YouTubeAdmissionUnavailableError(Date.now() + 15000);
     }
   } else if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-    throw new RefreshDeferredError(Date.now() + 15000);
+    throw new YouTubeAdmissionUnavailableError(Date.now() + 15000);
   } else retryAt = local.reserve(Date.now(), interval, maximum);
   if (retryAt) throw new RefreshDeferredError(retryAt);
 }

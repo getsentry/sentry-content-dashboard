@@ -3,3 +3,4 @@ export class RefreshCoordinationError extends Error {}
 export class RefreshDeferredError extends Error {
   constructor(public retryAt: number) { super('YouTube refresh deferred by quota policy'); }
 }
+export class YouTubeAdmissionUnavailableError extends RefreshDeferredError {}

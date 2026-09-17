@@ -198,8 +198,13 @@ a new lease in the first 2.5 seconds, leaving time for the 15-second upstream fe
 Redis connection/command timeouts are 1.5 seconds/1 second. Background reads use the normal 30-second freshness boundary even after a soft
 read timeout; snapshots seen during coordination supply validators and quota
 fallback data. Partial stream timeouts/protocol errors are reported to Sentry
-without dropping content already displayed. Docs storage still
-requires working Redis on Vercel. Failed sources back off for 15 seconds per worker,
+without dropping content already displayed. Docs ingestion writes still
+require working Redis on Vercel. If the stored changelog is empty or unreadable,
+dashboard reads recover recent commits affecting `docs/` and `platform-includes/`
+from GitHub (up to 30 per path, deduplicated). These use real commit dates and
+messages, not generated summaries, and Next's persistent Data Cache with a
+five-minute revalidation interval. Storage failures remain reported to Sentry.
+Failed sources back off for 15 seconds per worker,
 preserving their last successful snapshot with an explicit refresh warning.
 Blog/changelog/YouTube revalidation sends ETag/Last-Modified when supplied by the
 upstream, allowing unchanged bodies/parsing to be reused. Network cancellation
@@ -213,8 +218,16 @@ project allocation and other consumers of the same API project. Google's
 [quota documentation](https://developers.google.com/youtube/v3/determine_quota_cost)
 currently lists a default separate allowance of 100 search requests per day.
 All public entry points, including forced streams and exports, share the policy.
-Production requires Redis admission; Redis outages never permit unrestricted
-YouTube calls. Local development uses an in-process admission window.
+Production search requests require Redis admission. If Redis admission is missing
+or unavailable, reads recover through the channel's uploads playlist instead of
+bypassing the search guard. Google's [uploads API](https://developers.google.com/youtube/v3/docs/playlistItems/list)
+costs one unit per request. Next's persistent Data Cache (independent of Redis)
+caches channel lookup for one day and up to 50 uploads for 20 minutes. The normal
+90-day publication filter still applies. Both recovery caches use `unstable_cache`
+so dynamic API routes do not disable them; forced dashboard refreshes do not bypass
+these recovery intervals. Recovery has bounded freshness and does not guarantee a
+global quota ceiling across deployments or regions. Local development uses an
+in-process search admission window.
 
 A denied refresh preserves saved content and its original fetched timestamp.
 The dashboard and export label deferred refreshes, and `/api/youtube` includes

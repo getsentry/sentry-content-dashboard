@@ -1,4 +1,7 @@
 import { reserveYouTubeRefresh } from '../youtubeQuota';
+import * as Sentry from '@sentry/nextjs';
+import { YouTubeAdmissionUnavailableError } from '../cacheErrors';
+import { loadUploads } from './youtubeUploads';
 import { fetchFeed, validators } from '../fetchFeed';
 import type { SourcePayload, SourceSnapshot } from '../../utils/content';
 import { subDays, parseISO } from 'date-fns';
@@ -45,7 +48,13 @@ export async function load(previous?: SourceSnapshot): Promise<SourcePayload> {
 
 
     // Fetch videos from Sentry's YouTube channel
-    await reserveYouTubeRefresh();
+    try {
+      await reserveYouTubeRefresh();
+    } catch (error) {
+      if (!(error instanceof YouTubeAdmissionUnavailableError)) throw error;
+      Sentry.logger.warn('YouTube admission unavailable; using cached uploads playlist');
+      return loadUploads();
+    }
     const response = await fetchFeed(apiUrl, previous);
 
     if (response.status === 304 && previous) return previous;
