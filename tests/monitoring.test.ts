@@ -9,6 +9,17 @@ const { checkForNewPages } = require('../scripts/monitor-docs.js');
 let directory: string;
 beforeEach(async () => { directory = await mkdtemp(path.join(tmpdir(), 'content-monitor-')); });
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+function isGitHubRequest(url: string) {
+  const parsed = new URL(url);
+  if (parsed.origin === 'https://api.github.com' && !parsed.username && !parsed.password) return true;
+  if (parsed.href === 'https://example.test/hook') return false;
+  throw new Error(`Unexpected mock destination: ${parsed.origin}`);
+}
+test.each(['https://api.github.com.evil.test/', 'https://evil.test/api.github.com',
+  'https://evil.test/?host=api.github.com', 'https://api.github.com@evil.test/',
+  'https://user@api.github.com/', 'http://api.github.com/'])('mock rejects deceptive URL %s', url => {
+  expect(() => isGitHubRequest(url)).toThrow('Unexpected mock destination');
+});
 const sha = (n: number) => n.toString(16).padStart(40, '0');
 test('failed delivery stops in order and retains last successful checkpoint for retry', async () => {
   const stateFile = path.join(directory, 'state.json');
@@ -16,7 +27,7 @@ test('failed delivery stops in order and retains last successful checkpoint for 
   const delivered: string[] = [];
   let fail = true;
   const fetchImpl = vi.fn(async (url: string, options: RequestInit) => {
-    if (url.includes('api.github.com')) return Response.json([3, 2, 1, 0].map(n => ({ sha: sha(n) })));
+    if (isGitHubRequest(url)) return Response.json([3, 2, 1, 0].map(n => ({ sha: sha(n) })));
     const id = JSON.parse(options.body as string).commits[0].id;
     delivered.push(id);
     return new Response('', { status: fail && id === sha(2) ? 500 : 200 });
@@ -35,7 +46,7 @@ test('paginates until the checkpoint instead of dropping intermediate commits', 
   let pages = 0;
   let deliveries = 0;
   await runOnce({ stateFile, secret: 'test', webhookUrl: 'https://example.test/hook', fetchImpl: async (url: string) => {
-    if (!url.includes('api.github.com')) { deliveries++; return new Response(''); }
+    if (!isGitHubRequest(url)) { deliveries++; return new Response(''); }
     pages++;
     return Response.json((pages === 1 ? Array.from({ length: 100 }, (_, i) => 101 - i) : [1, 0]).map(n => ({ sha: sha(n) })));
   } });
@@ -61,7 +72,7 @@ test('first-run failures retain the initial batch even after upstream advances',
   let head = 10;
   const delivered: string[] = [];
   const options = { stateFile, secret: 'test', webhookUrl: 'https://example.test/hook', fetchImpl: async (url: string, options: RequestInit) => {
-    if (url.includes('api.github.com')) return Response.json(Array.from({ length: head }, (_, i) => ({ sha: sha(head - i) })));
+    if (isGitHubRequest(url)) return Response.json(Array.from({ length: head }, (_, i) => ({ sha: sha(head - i) })));
     delivered.push(JSON.parse(options.body as string).commits[0].id);
     return new Response('', { status: head === 10 ? 500 : 200 });
   } };

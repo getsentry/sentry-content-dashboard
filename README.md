@@ -178,7 +178,8 @@ Each dashboard visit uses one streaming `GET /api/content?refresh=1` request.
 Available source snapshots appear immediately; independent sources refresh in
 parallel and update the same page as each completes. A slow or unavailable source
 does not hide the others, and the page identifies sources still updating or failed.
-First visits and manual retries revalidate even recent snapshots. Background tab
+First visits and manual retries revalidate even recent snapshots, subject to the
+shared YouTube quota policy below. Background tab
 returns are throttled to once per 30 seconds and reuse snapshots younger than
 30 seconds. Documentation is reread on each server refresh so ingestion changes
 remain visible. Snapshots older than 24 hours are discarded.
@@ -186,13 +187,43 @@ remain visible. Snapshots older than 24 hours are discarded.
 Source refreshes are shared with individual source APIs and Markdown exports.
 With `REDIS_URL`, normalized snapshots and 18-second refresh leases coordinate
 workers; locally an in-memory worker cache coalesces simultaneous requests.
-Redis snapshot-read failures fall back to the worker cache after 400 ms so an
-optional cache outage does not disable healthy external feeds. Docs storage still
+Redis snapshot reads have a 400 ms soft display deadline; late results still warm
+the worker cache and a slow read does not disable shared coordination. Actual
+transport failures back off for 15 seconds. Lease contention/loss does not disable
+other sources. Workers wait up to 18 seconds for an existing owner but only acquire
+a new lease in the first 2.5 seconds, leaving time for the 15-second upstream fetch.
+Redis connection/command timeouts are 1.5 seconds/1 second. Docs storage still
 requires working Redis on Vercel. Failed sources back off for 15 seconds per worker,
 preserving their last successful snapshot with an explicit refresh warning.
 Blog/changelog/YouTube revalidation sends ETag/Last-Modified when supplied by the
 upstream, allowing unchanged bodies/parsing to be reused. Network cancellation
 stops delivery to that viewer while an in-progress shared refresh can still finish.
+
+YouTube requests have an independent shared admission policy immediately before
+upstream fetches, including unsuccessful requests. Defaults allow at most one
+attempt per 20 minutes and 90 attempts in any rolling 24 hours. Configure
+`YOUTUBE_REFRESH_INTERVAL_MS` and `YOUTUBE_MAX_REFRESHES_PER_DAY` to fit the actual
+project allocation and other consumers of the same API project. Google's
+[quota documentation](https://developers.google.com/youtube/v3/determine_quota_cost)
+currently lists a default separate allowance of 100 search requests per day.
+All public entry points, including forced streams and exports, share the policy.
+Production requires Redis admission; Redis outages never permit unrestricted
+YouTube calls. Local development uses an in-process admission window.
+
+A denied refresh preserves saved content and its original fetched timestamp.
+The dashboard and export label deferred refreshes, and `/api/youtube` includes
+`X-Content-Refresh: deferred` and `Retry-After` headers. Without a saved snapshot,
+YouTube is reported unavailable while healthy sources continue loading.
+
+RSS/Atom parsing uses a shared server-only XML/HTML parser. Each representation is
+decoded once, React renders extracted content as text, and exports escape text at
+the Markdown boundary. Literal code examples remain readable.
+
+Run `npm test`, `npm run lint`, and `npm run build` before publication. The Validate
+workflow runs these on PRs with an isolated Redis service. To include real-Redis
+tests locally, set `REDIS_TEST_URL` to an **isolated test database**; those tests use
+`content:v1:blog` keys and must never target application data. Without that variable,
+the two Redis integration cases are explicitly skipped.
 
 The initial page fonts are self-hosted under `public/fonts/`, with their licenses.
 Replay remains eagerly initialized and unmasked; Logs and tracing stay enabled.
