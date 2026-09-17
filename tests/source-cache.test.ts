@@ -180,3 +180,30 @@ test('store-observed snapshot supplies validators and quota fallback after a mis
   expect(result.refreshDeferredUntil).toBeDefined();
   expect(loader).toHaveBeenCalledExactlyOnceWith(saved);
 });
+
+test('forced visits upgrade an in-flight cached background read and coalesce forced callers', async () => {
+  vi.useFakeTimers();
+  const load = vi.fn().mockResolvedValue({ items: [item('Saved')] });
+  const cache = new SourceCache(loaders(load));
+  await cache.refresh('blog');
+  vi.advanceTimersByTime(100);
+  load.mockResolvedValue({ items: [item('New')] });
+  const background = cache.refresh('blog');
+  const forced = cache.refresh('blog', true);
+  const another = cache.refresh('blog', true);
+  expect(another).toBe(forced);
+  expect((await background).items[0].title).toBe('Saved');
+  expect((await forced).items[0].title).toBe('New');
+  expect(load).toHaveBeenCalledTimes(2);
+});
+test('forced visits reuse actual upstream work already running for a background read', async () => {
+  let finish!: (value: { items: unknown[] }) => void;
+  const load = vi.fn(() => new Promise<{ items: unknown[] }>(resolve => { finish = resolve; }));
+  const cache = new SourceCache(loaders(load));
+  const background = cache.refresh('blog');
+  await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+  const forced = cache.refresh('blog', true);
+  finish({ items: [item('New')] });
+  expect(await forced).toEqual(await background);
+  expect(load).toHaveBeenCalledOnce();
+});

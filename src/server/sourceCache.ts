@@ -13,7 +13,7 @@ export interface SnapshotStore {
 // Shared by API reads, streamed dashboard loads, and exports in each worker.
 export class SourceCache {
   private snapshots = new Map<ContentSource, SourceSnapshot>();
-  private inFlight = new Map<ContentSource, Promise<SourceSnapshot>>();
+  private inFlight = new Map<ContentSource, { force: boolean; task: Promise<SourceSnapshot> }>();
   private storeUnavailableUntil = 0;
   private reads = new Map<ContentSource, Promise<SourceSnapshot | undefined>>();
   private failures = new Map<ContentSource, number>();
@@ -51,9 +51,17 @@ export class SourceCache {
 
   refresh(source: ContentSource, force = false): Promise<SourceSnapshot> {
     const pending = this.inFlight.get(source);
-    if (pending) return pending;
-    const task = this.update(source, force, Date.now()).finally(() => this.inFlight.delete(source));
-    this.inFlight.set(source, task);
+    if (pending && (!force || pending.force)) return pending.task;
+    const requestedAt = Date.now();
+    // Upgrade background reads without starting a competing upstream request.
+    const work = pending ? pending.task.then(snapshot => {
+      if (snapshot.fetchedAt >= requestedAt || snapshot.refreshBusy || snapshot.refreshDeferredUntil) return snapshot;
+      return this.update(source, true, requestedAt);
+    }) : this.update(source, force, requestedAt);
+    const task = work.finally(() => {
+      if (this.inFlight.get(source)?.task === task) this.inFlight.delete(source);
+    });
+    this.inFlight.set(source, { force, task });
     return task;
   }
 

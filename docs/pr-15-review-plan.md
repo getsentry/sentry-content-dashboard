@@ -144,3 +144,9 @@ Missing repository commit dates now fall back to GitHub's canonical Git commit
 object, with SHA matching and valid-date checks. Historical dates are preserved;
 non-documentation commits skip date recovery. Four new regressions cover nullable
 metadata, committer fallback, corrupt/mismatched objects, and irrelevant commits.
+
+Concurrent forced visits now upgrade pending background cache reads. They reuse
+an actual fresh upstream result, but revalidate if the background request only
+returned saved content. Forced callers share the upgrade promise; quota/busy
+results remain explicit. Two regressions cover both orderings without duplicate
+upstream requests.
