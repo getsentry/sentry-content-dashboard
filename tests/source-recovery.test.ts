@@ -1,7 +1,8 @@
 import { afterEach, expect, test, vi } from 'vitest';
 const storage = vi.hoisted(() => ({ getChangelogEntries: vi.fn(), getRedisClient: vi.fn() }));
+const filesystem = vi.hoisted(() => ({ readFile: vi.fn(async () => JSON.stringify({ knownPages: [] })) }));
 vi.mock('../src/utils/changelogStorage', () => storage);
-vi.mock('fs/promises', () => ({ readFile: vi.fn(async () => JSON.stringify({ knownPages: [] })) }));
+vi.mock('fs/promises', () => filesystem);
 vi.mock('../config', () => ({ config: { youtube: { apiKey: 'test-key', channelId: 'channel', maxResults: 50 }, content: { daysToShow: 90 } } }));
 import { load as youtube } from '../src/server/sources/youtube';
 import { load as docs } from '../src/server/sources/docs';
@@ -70,8 +71,21 @@ test('healthy Docs history preserves stored summaries without a GitHub dependenc
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-test('Docs reports failure when both storage and GitHub are unavailable', async () => {
+test('Docs keeps static content available when storage and GitHub are unavailable', async () => {
   storage.getChangelogEntries.mockRejectedValue(Error('Redis unavailable'));
+  filesystem.readFile.mockResolvedValueOnce(JSON.stringify({ knownPages: [{ id: 'static', title: 'Static docs',
+    description: '', url: 'https://docs.sentry.io/', publishedAt: '2026-09-01' }] }));
   vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
-  await expect(docs()).rejects.toThrow('GitHub docs history request failed (403)');
+  expect((await docs()).items).toMatchObject([{ id: 'static', title: 'Static docs' }]);
+});
+
+test('Docs recovery keeps valid commits when another path or commit is invalid', async () => {
+  storage.getChangelogEntries.mockResolvedValue([]);
+  const invalidCommit = { ...commit, sha: 'invalid', commit: { ...commit.commit, author: { name: 'Author' } } };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(Response.json([invalidCommit, commit]))
+    .mockResolvedValueOnce(new Response('', { status: 403 }));
+  vi.stubGlobal('fetch', fetchMock);
+  const result = await docs();
+  expect(result.items).toMatchObject([{ id: 'docs-abc' }]);
 });

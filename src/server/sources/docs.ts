@@ -22,7 +22,12 @@ async function readChangelog() {
     // the read-only dashboard can recover directly from canonical Git history.
     Sentry.logger.warn('Documentation storage unavailable; reading GitHub history');
   }
-  return loadDocsHistory();
+  try {
+    return await loadDocsHistory();
+  } catch {
+    Sentry.logger.warn('Documentation GitHub history unavailable; using static content');
+    return [];
+  }
 }
 
 async function fetchStaticDocs(): Promise<unknown[]> {
