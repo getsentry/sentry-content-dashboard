@@ -45,7 +45,8 @@ export function parseFeed(xml: string, source: 'blog' | 'changelog'): ContentIte
       if (!['https:', 'http:'].includes(canonical.protocol)) throw new Error('Invalid feed link');
       const description = atom ? text(field('summary').length ? 'summary' : 'content') : text('description', true);
       const date = atom ? text('updated') || text('published') : text('pubDate');
-      const publishedAt = date ? new Date(date).toISOString() : new Date().toISOString();
+      if (!date) throw new Error('Feed item is missing its publication date');
+      const publishedAt = new Date(date).toISOString();
       const author = atom ? field('author').find('name').text().trim() : text('dc:creator');
       items.push({ id: `${source}-${canonical.href}`, title, description, url: canonical.href,
         publishedAt, source, categories: detectCategories(title, description, source),

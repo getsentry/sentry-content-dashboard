@@ -207,3 +207,20 @@ test('forced visits reuse actual upstream work already running for a background 
   expect(await forced).toEqual(await background);
   expect(load).toHaveBeenCalledOnce();
 });
+
+test('forced callers share upstream failures and respect backoff before retrying', async () => {
+  vi.useFakeTimers();
+  const load = vi.fn().mockRejectedValue(Error('upstream down'));
+  const cache = new SourceCache(loaders(load));
+  const background = cache.refresh('blog');
+  const forced = cache.refresh('blog', true);
+  const results = await Promise.allSettled([background, forced]);
+  expect(results.map(result => result.status)).toEqual(['rejected', 'rejected']);
+  expect(load).toHaveBeenCalledOnce();
+  await expect(cache.refresh('blog', true)).rejects.toThrow('temporarily unavailable');
+  expect(load).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(15001);
+  load.mockResolvedValue({ items: [item('Recovered')] });
+  expect((await cache.refresh('blog', true)).items[0].title).toBe('Recovered');
+  expect(load).toHaveBeenCalledTimes(2);
+});

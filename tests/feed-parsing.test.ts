@@ -37,9 +37,9 @@ test('invalid feed envelopes fail instead of publishing an empty success', () =>
 });
 
 test('relative feed links resolve against the source and Atom xml:base', () => {
-  const relative = '<rss><channel><item><title>Relative</title><link>/new-post/</link></item></channel></rss>';
+  const relative = '<rss><channel><item><title>Relative</title><link>/new-post/</link><pubDate>2026-09-17</pubDate></item></channel></rss>';
   expect(parseFeed(relative, 'blog')[0].url).toBe('https://blog.sentry.io/new-post/');
-  const atom = '<feed xml:base="https://example.com/updates/"><entry xml:base="v2/"><title>Release</title><link href="new"/></entry></feed>';
+  const atom = '<feed xml:base="https://example.com/updates/"><entry xml:base="v2/"><title>Release</title><link href="new"/><updated>2026-09-17</updated></entry></feed>';
   expect(parseFeed(atom, 'changelog')[0].url).toBe('https://example.com/updates/v2/new');
 });
 test('bad links or dates cannot hide healthy entries, but an entirely invalid feed fails', () => {
@@ -49,4 +49,13 @@ test('bad links or dates cannot hide healthy entries, but an entirely invalid fe
   expect(Sentry.logger.warn).toHaveBeenCalledWith('Skipped invalid feed entries', { source: 'blog', count: 3 });
   expect(Sentry.captureException).toHaveBeenCalledOnce();
   expect(() => parseFeed(`<rss><channel>${bad}</channel></rss>`, 'blog')).toThrow('no valid entries');
+});
+
+test.each(['rss', 'atom'])('%s skips undated entries instead of assigning the current time', format => {
+  const xml = format === 'rss'
+    ? '<rss><channel><item><title>Undated</title><link>/undated</link></item><item><title>Dated</title><link>/dated</link><pubDate>2020-01-01</pubDate></item></channel></rss>'
+    : '<feed><entry><title>Undated</title><link href="/undated"/><updated> </updated></entry><entry><title>Dated</title><link href="/dated"/><published>2020-01-01</published></entry></feed>';
+  const items = parseFeed(xml, 'blog');
+  expect(items.map(item => [item.title, item.publishedAt])).toEqual([['Dated', '2020-01-01T00:00:00.000Z']]);
+  expect(Sentry.logger.warn).toHaveBeenCalledWith('Skipped invalid feed entries', { source: 'blog', count: 1 });
 });

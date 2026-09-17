@@ -150,3 +150,8 @@ an actual fresh upstream result, but revalidate if the background request only
 returned saved content. Forced callers share the upgrade promise; quota/busy
 results remain explicit. Two regressions cover both orderings without duplicate
 upstream requests.
+
+Undated RSS/Atom entries are now reported and skipped, preserving historical
+chronology. The suggestion to bypass a concurrent failed refresh is intentionally
+not applied: force bypasses freshness, not failure backoff or quota protection.
+A regression verifies one shared failure, backoff, and successful later retry.
