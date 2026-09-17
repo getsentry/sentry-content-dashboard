@@ -1,81 +1,46 @@
+import { markdownText } from '../../../../server/markdownText';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
-import axios from 'axios';
-import { headers } from 'next/headers';
+import { collectContent, type ContentItem } from '../../../../utils/content';
+import { refreshSource } from '../../../../server/contentService';
 
-interface ContentItem {
-  id: string;
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-  source: 'blog' | 'youtube' | 'docs' | 'changelog';
-  thumbnail?: string;
-  author?: string;
-  duration?: string;
-  lastModified?: string;
-}
-
-interface DocsPage {
-  title: string;
-  description: string;
-  url: string;
-  lastModified: string;
-  source: 'docs';
-}
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     console.log('Markdown export API request received');
 
-    // Get the base URL from the request headers
-    const headersList = await headers();
-    const host = headersList.get('host') || 'localhost:3000';
-    const protocol = headersList.get('x-forwarded-proto') || 'http';
-    const baseUrl = `${protocol}://${host}`;
-
-    console.log('Base URL for API calls:', baseUrl);
-
-    // Fetch all content sources using full URLs
-    const [blogResponse, youtubeResponse, docsResponse, changelogResponse] = await Promise.all([
-      axios.get(`${baseUrl}/api/blog`),
-      axios.get(`${baseUrl}/api/youtube`),
-      axios.get(`${baseUrl}/api/docs`),
-      axios.get(`${baseUrl}/api/changelog`)
-    ]);
-
-    const blogPosts = blogResponse.data || [];
-    const youtubeVideos = youtubeResponse.data || [];
-    const docsPages = docsResponse.data || [];
-    const changelogItems = changelogResponse.data || [];
-
-    // Transform docs pages to match content item format
-    const transformedDocs = docsPages.map((page: DocsPage) => ({
-      id: `docs-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      title: page.title,
-      description: page.description,
-      url: page.url,
-      publishedAt: page.lastModified || page.lastModified,
-      source: 'docs' as const,
-      lastModified: page.lastModified
-    }));
-
-    // Combine and sort by publication date
-    const allContent = [...blogPosts, ...youtubeVideos, ...transformedDocs, ...changelogItems].sort((a, b) => 
-      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-    );
-
-    // Generate markdown content
-    const markdown = generateMarkdown(allContent);
+    const deferred: string[] = [];
+    const busy: string[] = [];
+    const load = (source: Parameters<typeof refreshSource>[0]) => async () => {
+      const snapshot = await refreshSource(source);
+      if (snapshot.refreshBusy) busy.push(source);
+      if (snapshot.refreshDeferredUntil) deferred.push(source);
+      return snapshot.items;
+    };
+    const { items, failedSources } = await collectContent({
+      blog: load('blog'), youtube: load('youtube'), docs: load('docs'), changelog: load('changelog'),
+    });
+    if (failedSources.length === 4) {
+      return NextResponse.json({ error: 'All content sources are unavailable' }, { status: 503 });
+    }
+    const warning = failedSources.length
+      ? `> Partial export. Unavailable sources: ${failedSources.join(', ')}.\n\n` : '';
+    const deferredWarning = deferred.length ? `> Saved content; refresh deferred: ${deferred.join(', ')}.\n\n` : '';
+    const busyWarning = busy.length ? `> Saved content; another refresh is still busy: ${busy.join(', ')}.\n\n` : '';
+    const markdown = warning + deferredWarning + busyWarning + generateMarkdown(items);
 
     // Return as markdown with proper content type
     return new NextResponse(markdown, {
       headers: {
         'Content-Type': 'text/markdown; charset=utf-8',
+        'X-Unavailable-Sources': failedSources.join(','),
         'Content-Disposition': 'attachment; filename="sentry-content-export.md"'
       }
     });
 
   } catch (error) {
+    Sentry.captureException(error);
     console.error('Error generating markdown export:', error);
     return NextResponse.json(
       {
@@ -106,11 +71,11 @@ function generateMarkdown(content: ContentItem[]): string {
   if (groupedContent.blog.length > 0) {
     markdown += `## 📝 Blog Posts (${groupedContent.blog.length})\n\n`;
     groupedContent.blog.forEach((post, index) => {
-      markdown += `### ${index + 1}. ${post.title}\n`;
-      markdown += `- **URL**: ${post.url}\n`;
+      markdown += `### ${index + 1}. ${markdownText(post.title)}\n`;
+      markdown += `- **URL**: ${markdownText(post.url)}\n`;
       markdown += `- **Published**: ${post.publishedAt}\n`;
-      if (post.author) markdown += `- **Author**: ${post.author}\n`;
-      if (post.description) markdown += `- **Description**: ${post.description}\n`;
+      if (post.author) markdown += `- **Author**: ${markdownText(post.author)}\n`;
+      if (post.description) markdown += `- **Description**: ${markdownText(post.description)}\n`;
       markdown += `\n`;
     });
   }
@@ -119,11 +84,11 @@ function generateMarkdown(content: ContentItem[]): string {
   if (groupedContent.youtube.length > 0) {
     markdown += `## 🎥 YouTube Videos (${groupedContent.youtube.length})\n\n`;
     groupedContent.youtube.forEach((video, index) => {
-      markdown += `### ${index + 1}. ${video.title}\n`;
-      markdown += `- **URL**: ${video.url}\n`;
+      markdown += `### ${index + 1}. ${markdownText(video.title)}\n`;
+      markdown += `- **URL**: ${markdownText(video.url)}\n`;
       markdown += `- **Published**: ${video.publishedAt}\n`;
-      if (video.duration) markdown += `- **Duration**: ${video.duration}\n`;
-      if (video.description) markdown += `- **Description**: ${video.description}\n`;
+      if (video.duration) markdown += `- **Duration**: ${markdownText(video.duration)}\n`;
+      if (video.description) markdown += `- **Description**: ${markdownText(video.description)}\n`;
       markdown += `\n`;
     });
   }
@@ -132,10 +97,10 @@ function generateMarkdown(content: ContentItem[]): string {
   if (groupedContent.docs.length > 0) {
     markdown += `## 📚 Documentation (${groupedContent.docs.length})\n\n`;
     groupedContent.docs.forEach((doc, index) => {
-      markdown += `### ${index + 1}. ${doc.title}\n`;
-      markdown += `- **URL**: ${doc.url}\n`;
+      markdown += `### ${index + 1}. ${markdownText(doc.title)}\n`;
+      markdown += `- **URL**: ${markdownText(doc.url)}\n`;
       markdown += `- **Last Modified**: ${doc.lastModified || doc.publishedAt}\n`;
-      if (doc.description) markdown += `- **Description**: ${doc.description}\n`;
+      if (doc.description) markdown += `- **Description**: ${markdownText(doc.description)}\n`;
       markdown += `\n`;
     });
   }
@@ -144,10 +109,10 @@ function generateMarkdown(content: ContentItem[]): string {
   if (groupedContent.changelog.length > 0) {
     markdown += `## 🗒️ Changelog Updates (${groupedContent.changelog.length})\n\n`;
     groupedContent.changelog.forEach((item, index) => {
-      markdown += `### ${index + 1}. ${item.title}\n`;
-      markdown += `- **URL**: ${item.url}\n`;
+      markdown += `### ${index + 1}. ${markdownText(item.title)}\n`;
+      markdown += `- **URL**: ${markdownText(item.url)}\n`;
       markdown += `- **Published**: ${item.publishedAt}\n`;
-      if (item.description) markdown += `- **Description**: ${item.description}\n`;
+      if (item.description) markdown += `- **Description**: ${markdownText(item.description)}\n`;
       markdown += `\n`;
     });
   }

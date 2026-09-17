@@ -1,128 +1,36 @@
 name: Monitor Sentry Docs Changes
-
 on:
   schedule:
-    # Run every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allow manual triggering
-
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: docs-monitor
+  cancel-in-progress: false
 jobs:
   monitor-docs:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout monitoring repo
-      uses: actions/checkout@v4
-      
-    - name: Check for new commits
-      id: check-commits
-      run: |
-        # Get the latest commit SHA from sentry-docs
-        LATEST_SHA=$(curl -s -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/getsentry/sentry-docs/commits/master" | \
-          jq -r '.sha')
-        
-        # Get the last processed SHA from our file
-        if [ -f "last-processed-sha.txt" ]; then
-          LAST_SHA=$(cat last-processed-sha.txt)
-        else
-          LAST_SHA=""
-        fi
-        
-        # Check if there are new commits
-        if [ "$LATEST_SHA" != "$LAST_SHA" ] && [ "$LATEST_SHA" != "" ]; then
-          echo "new_commits=true" >> $GITHUB_OUTPUT
-          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
-          echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
-        else
-          echo "new_commits=false" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Process new commits
-      if: steps.check-commits.outputs.new_commits == 'true'
-      run: |
-        echo "🆕 New commits detected!"
-        echo "Latest SHA: ${{ steps.check-commits.outputs.latest_sha }}"
-        echo "Last processed SHA: ${{ steps.check-commits.outputs.last_sha }}"
-        
-        # Get commits since last processed SHA
-        if [ "${{ steps.check-commits.outputs.last_sha }}" != "" ]; then
-          COMMITS_URL="https://api.github.com/repos/getsentry/sentry-docs/compare/${{ steps.check-commits.outputs.last_sha }}...${{ steps.check-commits.outputs.latest_sha }}"
-          echo "Fetching commits from: $COMMITS_URL"
-          COMMITS_DATA=$(curl -s -H "Accept: application/vnd.github.v3+json" "$COMMITS_URL")
-          # For compare API, commits are in .commits array
-          COMMITS_ARRAY=$(echo "$COMMITS_DATA" | jq -r '.commits[]? | select(.sha != null)')
-        else
-          COMMITS_URL="https://api.github.com/repos/getsentry/sentry-docs/commits?sha=master&per_page=10"
-          echo "Fetching commits from: $COMMITS_URL"
-          COMMITS_DATA=$(curl -s -H "Accept: application/vnd.github.v3+json" "$COMMITS_URL")
-          # For commits API, it's a direct array
-          COMMITS_ARRAY=$(echo "$COMMITS_DATA" | jq -r '.[]? | select(.sha != null)')
-        fi
-        
-        # Process each commit
-        echo "$COMMITS_ARRAY" | jq -r '.sha' | while read -r commit_sha; do
-          if [ "$commit_sha" != "" ]; then
-            echo "Processing commit: $commit_sha"
-            
-            # Get detailed commit info
-            COMMIT_DETAILS=$(curl -s -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/getsentry/sentry-docs/commits/$commit_sha")
-            
-            # Check if it has documentation files
-            DOC_FILES=$(echo "$COMMIT_DETAILS" | jq -r '.files[]? | select(.filename | test("\\.(md|mdx)$|/docs/|/documentation/")) | .filename' | wc -l)
-            
-            if [ "$DOC_FILES" -gt 0 ]; then
-              echo "  📚 Found $DOC_FILES documentation files changed"
-              
-              # Debug: Show first 4 chars of webhook secret for verification
-              echo "  🔑 Webhook secret starts with: ${WEBHOOK_SECRET:0:4}..."
-              WEBHOOK_SECRET="${{ secrets.WEBHOOK_SECRET }}"
-              echo "  🔑 Secret first 4 chars: ${WEBHOOK_SECRET:0:4}... (length: ${#WEBHOOK_SECRET})"
-              
-              # Create a GitHub-compatible push payload
-              WEBHOOK_PAYLOAD=$(echo "$COMMIT_DETAILS" | jq -c '{
-                ref: "refs/heads/master",
-                commits: [.],
-                repository: {
-                  name: "sentry-docs",
-                  full_name: "getsentry/sentry-docs",
-                  html_url: "https://github.com/getsentry/sentry-docs"
-                }
-              }')
-              
-              # Save payload to file for consistent signature calculation
-              echo -n "$WEBHOOK_PAYLOAD" > /tmp/webhook_payload.json
-              
-              # Calculate signature (hex format, not base64)
-              SIGNATURE="sha256=$(cat /tmp/webhook_payload.json | openssl dgst -sha256 -hmac "${{ secrets.WEBHOOK_SECRET }}" | awk '{print $2}')"
-              
-              # Trigger your application's webhook
-              curl -X POST "${{ secrets.WEBHOOK_URL }}" \
-                -H "Content-Type: application/json" \
-                -H "X-GitHub-Event: push" \
-                -H "X-Hub-Signature-256: $SIGNATURE" \
-                -d "@/tmp/webhook_payload.json" \
-                --fail-with-body
-              
-              if [ $? -eq 0 ]; then
-                echo "  ✅ Webhook triggered successfully"
-              else
-                echo "  ❌ Webhook failed"
-              fi
-            else
-              echo "  ⏭️  No documentation files changed, skipping"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deliver commits in order
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+        run: node poll-github.cjs
+      - name: Persist successful checkpoint even after a later failure
+        if: always()
+        run: |
+          if [ -f last-processed-sha.json ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add last-processed-sha.json
+            if ! git diff --cached --quiet; then
+              git commit -m 'chore: save docs polling checkpoint [skip ci]'
+              git push
             fi
           fi
-        done
-        
-        # Update the last processed SHA
-        echo "${{ steps.check-commits.outputs.latest_sha }}" > last-processed-sha.txt
-        echo "✅ Updated last processed SHA to: ${{ steps.check-commits.outputs.latest_sha }}"
-        # Note: We don't push to avoid permission issues - the SHA is stored in the workflow run
-        
-    - name: No new commits
-      if: steps.check-commits.outputs.new_commits == 'false'
-      run: |
-        echo "✅ No new commits since last check"
-        echo "Last processed SHA: ${{ steps.check-commits.outputs.last_sha }}"

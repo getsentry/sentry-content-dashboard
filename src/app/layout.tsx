@@ -29,6 +29,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link rel="preload" href="/fonts/e3t4euO8T-267oIAQAu6jDQyK3nVivNm4I81.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/pxiKyp0ihIEF2isfFJXUdVNF.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+      </head>
       <body className="antialiased font-['VT323']">
         {children}
         <Analytics />

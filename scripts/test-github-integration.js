@@ -21,14 +21,14 @@ async function testGitHubIntegration() {
     // Test 2: Test manual trigger (if GitHub token is configured)
     console.log('\n2. Testing manual trigger...');
     try {
-      const triggerPostResponse = await axios.post(`${BASE_URL}/api/github/trigger`);
+      const triggerPostResponse = await axios.post(`${BASE_URL}/api/github/trigger`, {}, { headers: { Authorization: `Bearer ${process.env.GITHUB_TRIGGER_SECRET || ''}` } });
       console.log('✅ Manual trigger successful:', triggerPostResponse.data.message);
       console.log(`   Commits processed: ${triggerPostResponse.data.commitsProcessed}`);
       
       if (triggerPostResponse.data.results && triggerPostResponse.data.results.length > 0) {
         console.log('   Recent docs changes found:');
         triggerPostResponse.data.results.slice(0, 3).forEach((result, index) => {
-          console.log(`   ${index + 1}. ${result.message.split('\n')[0]} (${result.filesChanged} files)`);
+          console.log(`   ${index + 1}. ${result.sha} (processed: ${result.processed})`);
         });
       }
     } catch (error) {
@@ -42,7 +42,7 @@ async function testGitHubIntegration() {
     
     // Test 3: Check changelog API
     console.log('\n3. Testing changelog API...');
-    const changelogResponse = await axios.get(`${BASE_URL}/api/changelog`);
+    const changelogResponse = await axios.get(`${BASE_URL}/api/docs`);
     console.log('✅ Changelog API accessible');
     console.log(`   Total changelog entries: ${changelogResponse.data.length}`);
     

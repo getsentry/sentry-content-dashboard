@@ -29,7 +29,7 @@ async function setup() {
   
   const repoName = await question('Enter your monitoring repository name (e.g., sentry-docs-monitor): ');
   const webhookUrl = await question('Enter your webhook URL (e.g., https://your-domain.com/api/github/webhook): ');
-  const webhookSecret = await question('Enter your webhook secret: ');
+
   
   console.log('\n📋 Setup Steps:');
   console.log('1. Create a new repository on GitHub');
@@ -48,7 +48,7 @@ async function setup() {
   console.log('   Go to Settings → Secrets and variables → Actions');
   console.log('   Add these secrets:');
   console.log(`   - WEBHOOK_URL: ${webhookUrl}`);
-  console.log(`   - WEBHOOK_SECRET: ${webhookSecret}\n`);
+  console.log('   - WEBHOOK_SECRET: the secret you entered (also set GITHUB_WEBHOOK_SECRET on the app)\n');
   
   console.log('5. Enable GitHub Actions:');
   console.log('   Go to the Actions tab in your repository');
@@ -61,13 +61,14 @@ async function setup() {
   
   console.log('📁 Files to copy to your monitoring repository:');
   console.log('   - .github/workflows/monitor-sentry-docs.yml');
+  console.log('   - poll-github.cjs');
   console.log('   - README.md\n');
   
   console.log('🔍 Monitoring:');
   console.log('- The workflow runs every 15 minutes');
   console.log('- Check the Actions tab to see when it runs');
   console.log('- View logs to see what commits are being processed');
-  console.log('- Only commits with documentation changes will trigger webhooks\n');
+  console.log('- The server checks each commit for documentation changes\n');
   
   console.log('🧪 Testing:');
   console.log('1. Make a test commit to the sentry-docs repository');

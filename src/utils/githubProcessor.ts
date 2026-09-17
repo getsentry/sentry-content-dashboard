@@ -1,4 +1,5 @@
-import { saveChangelogEntry as saveToStorage } from './changelogStorage';
+import * as Sentry from '@sentry/nextjs';
+import { getChangelogEntries, saveChangelogEntry as saveToStorage } from './changelogStorage';
 
 // Lazy imports to handle missing dependencies
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,22 +79,52 @@ interface ChangelogEntry {
 }
 
 
-export async function processDocsChanges(commit: Commit): Promise<void> {
+export async function processDocsChanges(input: { id: string }): Promise<boolean> {
   try {
     const octokitClient = await getOctokit();
     if (!octokitClient) {
-      console.log('GitHub integration not configured, skipping commit processing');
-      return;
+      throw new Error('GitHub integration not configured');
     }
 
-    console.log(`Processing commit ${commit.id}: ${commit.message}`);
+    if ((await getChangelogEntries()).some(entry => entry.id === `docs-${input.id}`)) return true;
 
     // Get detailed commit information
     const commitDetails = await octokitClient.rest.repos.getCommit({
       owner: 'getsentry',
       repo: 'sentry-docs',
-      ref: commit.id,
+      ref: input.id,
     });
+
+    // Trust GitHub's commit data, not caller-supplied titles, links, authors, or dates.
+    const data = commitDetails.data;
+    const files = data.files || [];
+    const docFiles = files.filter((file: { filename: string }) =>
+      file.filename.endsWith('.md') || file.filename.endsWith('.mdx') ||
+      file.filename.includes('/docs/') || file.filename.includes('/documentation/'));
+    if (!docFiles.length) return false;
+    const validDate = (...dates: unknown[]) => dates.find((date): date is string =>
+      typeof date === 'string' && Number.isFinite(Date.parse(date)));
+    let timestamp = validDate(data.commit.author?.date, data.commit.committer?.date);
+    if (!timestamp) {
+      // The repository endpoint permits nullable git-user metadata. The Git object
+      // endpoint provides the authoritative dates; never label old content as new.
+      const { data: gitCommit } = await octokitClient.rest.git.getCommit({
+        owner: 'getsentry', repo: 'sentry-docs', commit_sha: input.id,
+      });
+      if (gitCommit.sha !== data.sha) throw new Error('Canonical commit SHA mismatch');
+      timestamp = validDate(gitCommit.author?.date, gitCommit.committer?.date);
+    }
+    if (!timestamp) throw new Error('Commit has no valid canonical timestamp');
+    const commit: Commit = {
+      id: data.sha,
+      message: data.commit.message,
+      timestamp,
+      url: data.html_url,
+      author: { name: data.commit.author?.name || 'Unknown', email: '' },
+      added: files.filter((f: { status: string }) => f.status === 'added').map((f: { filename: string }) => f.filename),
+      removed: files.filter((f: { status: string }) => f.status === 'removed').map((f: { filename: string }) => f.filename),
+      modified: files.filter((f: { status: string }) => !['added', 'removed'].includes(f.status)).map((f: { filename: string }) => f.filename),
+    };
 
     const totalFiles = commitDetails.data.files?.length || 0;
     console.log(`Commit has ${totalFiles} total files changed`);
@@ -102,21 +133,6 @@ export async function processDocsChanges(commit: Commit): Promise<void> {
     if (totalFiles > 0 && commitDetails.data.files) {
       const sampleFiles = commitDetails.data.files.slice(0, 3).map((f: {filename: string}) => f.filename);
       console.log(`Sample files: ${sampleFiles.join(', ')}`);
-    }
-
-    // Filter for documentation files only
-    const docFiles = commitDetails.data.files?.filter((file: { filename: string }) => 
-      file.filename.endsWith('.md') || 
-      file.filename.endsWith('.mdx') ||
-      file.filename.includes('/docs/') ||
-      file.filename.includes('/documentation/')
-    ) || [];
-
-    console.log(`Found ${docFiles.length} documentation files`);
-    
-    if (docFiles.length === 0) {
-      console.log('No documentation files changed in this commit');
-      return;
     }
 
     // Generate AI summary of changes
@@ -149,11 +165,15 @@ export async function processDocsChanges(commit: Commit): Promise<void> {
 
     // Save to storage (Vercel KV in production, file in development)
     await saveToStorage(changelogEntry);
+    Sentry.logger.info('Documentation commit processed', { commitId: commit.id, fileCount: docFiles.length });
 
     console.log(`Successfully processed commit ${commit.id}`);
+    return true;
 
   } catch (error) {
-    console.error(`Error processing commit ${commit.id}:`, error);
+    Sentry.captureException(error);
+    Sentry.logger.error('Documentation commit processing failed', { commitId: input.id });
+    throw error;
   }
 }
 
@@ -200,8 +220,9 @@ Keep it brief, clear, and actionable.`;
     return completion.choices[0]?.message?.content || 'Documentation updated with various improvements.';
 
   } catch (error) {
+    Sentry.captureException(error);
+    Sentry.logger.warn('Documentation AI summary failed; using fallback');
     console.error('Error generating AI summary:', error);
     return `Documentation changes in ${files.length} file(s): ${files.map(f => f.filename).join(', ')}`;
   }
 }
-

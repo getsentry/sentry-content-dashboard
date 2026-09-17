@@ -1,131 +1,15 @@
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { refreshSource } from '../../../server/contentService';
 
-interface DocsPage {
-  url: string;
-  title: string;
-  description: string;
-  lastModified: string;
-  source: 'docs';
-}
-
-interface DocsChangelogEntry {
-  id: string;
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-  source: 'docs';
-  categories: string[];
-  commitId?: string;
-  author?: string;
-  filesChanged?: {
-    added: string[];
-    removed: string[];
-    modified: string[];
-  };
-  aiSummary?: string;
-  lastModified?: string; // Added for sorting consistency
-}
-
-// Unified type for sorting
-type UnifiedDocsItem = DocsPage | DocsChangelogEntry;
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    console.log('Docs API request received');
-    
-    // Get both static docs pages and changelog entries
-    const [staticDocs, changelogEntries] = await Promise.all([
-      fetchStaticDocs(),
-      fetchDocsChangelog()
-    ]);
-    
-    // Combine and sort by date
-    const allDocs = [...staticDocs, ...changelogEntries].sort((a, b) => {
-      // Helper function to get the date from either type
-      const getDate = (item: UnifiedDocsItem): string => {
-        if ('lastModified' in item && item.lastModified) {
-          return item.lastModified;
-        }
-        if ('publishedAt' in item && item.publishedAt) {
-          return item.publishedAt;
-        }
-        return new Date().toISOString(); // fallback
-      };
-      
-      const dateA = new Date(getDate(a)).getTime();
-      const dateB = new Date(getDate(b)).getTime();
-      return dateB - dateA;
-    });
-    
-    console.log(`Total docs items found: ${allDocs.length} (${staticDocs.length} static + ${changelogEntries.length} changelog)`);
-    
-    return NextResponse.json(allDocs);
+    const snapshot = await refreshSource('docs');
+    return NextResponse.json(snapshot.items, { headers: snapshot.refreshBusy ? { 'X-Content-Refresh': 'busy' } : {} });
   } catch (error) {
-    console.error('Error fetching docs pages:', error);
-    return NextResponse.json(
-      { 
-        error: 'Failed to fetch docs pages',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        debug: {
-          nodeEnv: process.env.NODE_ENV,
-          timestamp: new Date().toISOString()
-        }
-      },
-      { status: 500 }
-    );
-  }
-}
-
-async function fetchStaticDocs(): Promise<DocsPage[]> {
-  try {
-    // Path to the docs storage file
-    const docsFile = path.join(process.cwd(), 'data', 'docs-pages.json');
-    
-    // Check if the docs file exists
-    if (!fs.existsSync(docsFile)) {
-      console.log('Docs storage file not found, returning empty array');
-      return [];
-    }
-    
-    // Read and parse the docs data
-    const docsData = JSON.parse(fs.readFileSync(docsFile, 'utf8'));
-    const allPages: DocsPage[] = docsData.knownPages || [];
-    
-    console.log('Static docs pages found:', allPages.length);
-    return allPages;
-  } catch (error) {
-    console.error('Error fetching static docs:', error);
-    return [];
-  }
-}
-
-async function fetchDocsChangelog(): Promise<DocsChangelogEntry[]> {
-  try {
-    const { getChangelogEntries } = await import('../../../utils/changelogStorage');
-    const changelogData = await getChangelogEntries();
-    
-    const transformedEntries: DocsChangelogEntry[] = changelogData.map((entry) => ({
-      aiSummary: entry.aiSummary,
-      author: entry.author,
-      categories: entry.categories,
-      commitId: entry.commitId,
-      description: entry.description,
-      filesChanged: entry.filesChanged,
-      id: entry.id,
-      lastModified: entry.publishedAt,
-      publishedAt: entry.publishedAt,
-      source: 'docs' as const,
-      title: entry.title,
-      url: entry.url,
-    }));
-
-    console.log('Docs changelog entries loaded from storage:', transformedEntries.length);
-    return transformedEntries;
-  } catch (error) {
-    console.log('Error loading docs changelog:', error);
-    return [];
+    Sentry.captureException(error);
+    return NextResponse.json({ error: 'Failed to fetch docs content' }, { status: 503 });
   }
 }
