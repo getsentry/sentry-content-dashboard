@@ -2,6 +2,19 @@ import { detectCategories } from './categoryDetector';
 
 export const CONTENT_SOURCES = ['blog', 'youtube', 'docs', 'changelog'] as const;
 export type ContentSource = typeof CONTENT_SOURCES[number];
+
+// One docs commit inside a daily digest. `mergedAt` is when the commit landed on
+// master, which is the day the digest files it under.
+export interface DigestCommit {
+  id: string;
+  title: string;
+  summary: string;
+  author: string;
+  url: string;
+  mergedAt: string;
+  filesChanged: { added: string[]; modified: string[]; removed: string[] };
+}
+
 export interface ContentItem {
   id: string;
   title: string;
@@ -14,6 +27,7 @@ export interface ContentItem {
   author?: string;
   duration?: string;
   lastModified?: string;
+  commits?: DigestCommit[];
 }
 
 export function normalizeContent(value: unknown, source: ContentSource): ContentItem[] {
