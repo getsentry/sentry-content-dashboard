@@ -145,11 +145,14 @@ export default function Home() {
     return { blogCount, youtubeCount, docsCount, changelogCount, totalCount, categoryStats };
   };
 
+  // The pool the category and search filters narrow down, i.e. the selected
+  // source ('all' covers every source except docs).
+  const sourceContent = selectedFilter === 'all'
+    ? browsableContent
+    : content.filter(item => item.source === selectedFilter);
+
   const getFilteredContent = () => {
-    // Filter by source ('all' covers every source except docs)
-    let filtered = selectedFilter === 'all'
-      ? browsableContent
-      : content.filter(item => item.source === selectedFilter);
+    let filtered = sourceContent;
     
     // Filter by category
     if (selectedCategory !== 'all') {
@@ -595,7 +598,7 @@ export default function Home() {
                   )}
                 </div>
                 <span className="text-green-400">
-                  {filteredContent.length} of {content.length} items
+                  {filteredContent.length} of {sourceContent.length} items
                 </span>
               </div>
             </div>
