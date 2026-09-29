@@ -297,6 +297,15 @@
     0 0 0 8px var(--pixel-purple);
 }
 
+.pixel-border-orange {
+  border: 2px solid var(--pixel-orange);
+  box-shadow: 
+    0 0 0 2px var(--retro-bg),
+    0 0 0 4px var(--pixel-orange),
+    0 0 0 6px var(--retro-bg),
+    0 0 0 8px var(--pixel-orange);
+}
+
 .pixel-text {
   text-shadow: 
     2px 2px 0px var(--retro-bg),

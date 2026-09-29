@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import * as Sentry from '@sentry/nextjs';
 import Image from 'next/image';
-import { type ContentItem, type ContentSource } from '../utils/content';
+import { CONTENT_SOURCES, type ContentItem, type ContentSource } from '../utils/content';
 import { loadDashboardContent } from '../utils/loadDashboardContent';
 import { CATEGORIES, getCategoryById, getCategoryName } from '../utils/categoryDetector';
 
@@ -40,7 +40,7 @@ export default function Home() {
   const [deferredSources, setDeferredSources] = useState<ContentSource[]>([]);
   const [failedSources, setFailedSources] = useState<ContentSource[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedFilter, setSelectedFilter] = useState<'all' | 'blog' | 'youtube' | 'docs' | 'changelog'>('all');
+  const [selectedFilter, setSelectedFilter] = useState<'all' | 'blog' | 'youtube' | 'docs' | 'changelog' | 'customers'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -56,7 +56,7 @@ export default function Home() {
     activeRequest.current = controller;
     try {
       if (!background && !currentContent.current.length) setLoading(true);
-      setPendingSources(['blog', 'youtube', 'docs', 'changelog']);
+      setPendingSources([...CONTENT_SOURCES]);
       const started = performance.now();
       let firstVisible = false;
       const result = await Sentry.startSpan({ name: 'Load dashboard content', op: 'function' },
@@ -95,7 +95,7 @@ export default function Home() {
       console.error('Error fetching content:', err);
       // Keep the existing list visible if a background refresh fails.
       if (!currentContent.current.length) setError('Failed to fetch content. Please try again later.');
-      else setFailedSources(['blog', 'youtube', 'docs', 'changelog']);
+      else setFailedSources([...CONTENT_SOURCES]);
     } finally {
       if (activeRequest.current === controller) {
         activeRequest.current = null;
@@ -128,6 +128,7 @@ export default function Home() {
     const youtubeCount = content.filter(item => item.source === 'youtube').length;
     const docsCount = content.filter(item => item.source === 'docs').length;
     const changelogCount = content.filter(item => item.source === 'changelog').length;
+    const customersCount = content.filter(item => item.source === 'customers').length;
     const totalCount = content.length;
     
     // Category statistics
@@ -138,7 +139,7 @@ export default function Home() {
       color: category.color
     }));
     
-    return { blogCount, youtubeCount, docsCount, changelogCount, totalCount, categoryStats };
+    return { blogCount, youtubeCount, docsCount, changelogCount, customersCount, totalCount, categoryStats };
   };
 
   const getFilteredContent = () => {
@@ -178,7 +179,7 @@ export default function Home() {
     setIsMobileMenuOpen(false);
   };
 
-  const handleFilterChange = (filter: 'all' | 'blog' | 'youtube' | 'docs' | 'changelog') => {
+  const handleFilterChange = (filter: 'all' | 'blog' | 'youtube' | 'docs' | 'changelog' | 'customers') => {
     setSelectedFilter(filter);
     setIsMobileMenuOpen(false);
   };
@@ -262,7 +263,7 @@ export default function Home() {
             </p>
             
             {/* Source Statistics - Hidden on Mobile & Tablet, Desktop Only */}
-            <div className="hidden lg:grid grid-cols-5 gap-8 mb-8">
+            <div className="hidden lg:grid grid-cols-6 gap-8 mb-8">
               <button 
                 onClick={() => setSelectedFilter('all')}
                 className="text-center group cursor-pointer transition-all duration-200 hover:scale-105 rounded-lg p-2"
@@ -297,6 +298,13 @@ export default function Home() {
               >
                 <div className={`pixel-text text-4xl font-bold text-purple-400 font-['Press_Start_2P'] ${isSwirling ? 'animate-swirl-in' : ''}`}>{stats.changelogCount}</div>
                 <div className="text-sm text-cyan-400 font-['VT323'] group-hover:text-purple-400 transition-colors">CHANGELOG</div>
+              </button>
+              <button 
+                onClick={() => setSelectedFilter('customers')}
+                className="text-center group cursor-pointer transition-all duration-200 hover:scale-105 rounded-lg p-2"
+              >
+                <div className={`pixel-text text-4xl font-bold text-orange-400 font-['Press_Start_2P'] ${isSwirling ? 'animate-swirl-in-left' : ''}`}>{stats.customersCount}</div>
+                <div className="text-sm text-cyan-400 font-['VT323'] group-hover:text-orange-400 transition-colors">CUSTOMERS</div>
               </button>
             </div>
             
@@ -435,6 +443,16 @@ export default function Home() {
                    >
                      CHANGELOG
                    </button>
+                   <button
+                     onClick={() => handleFilterChange('customers')}
+                     className={`retro-button px-3 py-2 font-['Press_Start_2P'] text-xs transition-all duration-200 ${
+                       selectedFilter === 'customers' 
+                         ? 'bg-orange-400 text-retro-bg shadow-lg shadow-orange-400/50 scale-105 border-orange-300' 
+                         : 'hover:bg-orange-400/20 hover:border-orange-400/50'
+                     }`}
+                   >
+                     CUSTOMERS
+                   </button>
                 </div>
               </div>
               
@@ -529,6 +547,16 @@ export default function Home() {
                 }`}
               >
                 CHANGELOG
+              </button>
+              <button
+                onClick={() => setSelectedFilter('customers')}
+                className={`retro-button px-6 py-3 font-['Press_Start_2P'] text-sm transition-all duration-200 ${
+                  selectedFilter === 'customers' 
+                    ? 'bg-orange-400 text-retro-bg shadow-lg shadow-orange-400/50 scale-105 border-orange-300' 
+                    : 'hover:bg-orange-400/20 hover:border-orange-400/50'
+                }`}
+              >
+                CUSTOMER STORIES
               </button>
             </div>
             
@@ -655,6 +683,8 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
   const isYouTube = item.source === 'youtube';
   const isDocs = item.source === 'docs';
   const isChangelog = item.source === 'changelog';
+  const isCustomers = item.source === 'customers';
+  // For customer stories this is the discovery date: they carry no upstream date.
   const publishedDate = contentDate.format(new Date(item.publishedAt));
   
   return (
@@ -662,10 +692,11 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
       isYouTube ? 'pixel-border-red' : 
       isDocs ? 'pixel-border' : 
       isChangelog ? 'pixel-border-purple' :
+      isCustomers ? 'pixel-border-orange' :
       'pixel-border-blue'
     }`}>
       {/* Thumbnail */}
-      {isYouTube && item.thumbnail && (
+      {(isYouTube || isCustomers) && item.thumbnail && (
         <div className="relative w-full h-32 sm:h-40 lg:h-48">
           <Image
             src={item.thumbnail} 
@@ -679,8 +710,8 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
             </div>
           )}
           <div className="absolute top-1 sm:top-2 left-1 sm:left-2">
-            <span className="bg-red-500 text-white text-xs px-1 sm:px-2 py-1 rounded font-['VT323']">
-              🎥 VIDEO
+            <span className={`text-white text-xs px-1 sm:px-2 py-1 rounded font-['VT323'] ${isCustomers ? 'bg-orange-500' : 'bg-red-500'}`}>
+              {isCustomers ? '🏆 STORY' : '🎥 VIDEO'}
             </span>
           </div>
         </div>
@@ -697,9 +728,11 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
               ? 'bg-yellow-900 text-yellow-200 border-2 border-yellow-400'
               : isChangelog
               ? 'bg-purple-900 text-purple-200 border-2 border-purple-400'
+              : isCustomers
+              ? 'bg-orange-900 text-orange-200 border-2 border-orange-400'
               : 'bg-blue-900 text-blue-200 border-2 border-blue-400'
           }`}>
-            {isYouTube ? '🎥 YOUTUBE' : isDocs ? '📚 DOCS' : isChangelog ? '🗒️ CHANGELOG' : '📝 BLOG'}
+            {isYouTube ? '🎥 YOUTUBE' : isDocs ? '📚 DOCS' : isChangelog ? '🗒️ CHANGELOG' : isCustomers ? '🏆 CUSTOMER' : '📝 BLOG'}
           </span>
           <span className="text-xs text-cyan-400 font-['VT323']">{publishedDate}</span>
         </div>
@@ -725,6 +758,7 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
         <h3 className={`text-sm sm:text-base lg:text-lg font-bold mb-2 sm:mb-3 line-clamp-2 font-['VT323'] ${
           isYouTube ? 'text-red-200' : 
           isDocs ? 'text-yellow-200' : 
+          isCustomers ? 'text-orange-200' : 
           'text-blue-200'
         }`}>
           {item.title}
@@ -754,10 +788,12 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
               ? 'border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-retro-bg'
               : isChangelog
               ? 'border-purple-400 text-purple-400 hover:bg-purple-400 hover:text-retro-bg'
+              : isCustomers
+              ? 'border-orange-400 text-orange-400 hover:bg-orange-400 hover:text-retro-bg'
               : 'border-blue-400 text-blue-400 hover:bg-blue-400 hover:text-retro-bg'
           }`}
         >
-          {isYouTube ? 'WATCH' : isDocs ? 'READ' : isChangelog ? 'VIEW' : 'READ'}
+          {isYouTube ? 'WATCH' : isDocs ? 'READ' : isChangelog ? 'VIEW' : isCustomers ? 'READ STORY' : 'READ'}
           <svg className="ml-1 sm:ml-2 w-3 sm:w-4 h-3 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>

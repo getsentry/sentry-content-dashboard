@@ -24,7 +24,7 @@ test.skipIf(!url)('real Redis coordinates cold workers and expired owners cannot
   await shared.redis.del('content:v1:blog', 'content:v1:blog:lock');
   let finish!: (value: { items: unknown[] }) => void;
   const load = vi.fn(() => new Promise<{ items: unknown[] }>(resolve => { finish = resolve; }));
-  const loaders = { blog: load, youtube: load, docs: load, changelog: load };
+  const loaders = { blog: load, youtube: load, docs: load, changelog: load, customers: load };
   const a = new SourceCache(loaders, redisSnapshots).refresh('blog', true);
   const b = new SourceCache(loaders, redisSnapshots).refresh('blog', true);
   await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
@@ -50,7 +50,7 @@ test.skipIf(!url)('slow cold read still revalidates a pre-existing Redis snapsho
     return redisSnapshots.read(source);
   } };
   const load = vi.fn(async () => ({ items: [{ title: 'New on first visit', url: 'https://example.com/new', publishedAt: '2026-09-17' }] }));
-  const cache = new SourceCache({ blog: load, docs: load, youtube: load, changelog: load }, slowStore);
+  const cache = new SourceCache({ blog: load, docs: load, youtube: load, changelog: load, customers: load }, slowStore);
   expect((await cache.refresh('blog', true)).items[0].title).toBe('New on first visit');
   expect(load).toHaveBeenCalledOnce();
 });
@@ -65,7 +65,7 @@ test.skipIf(!url)('slow background read reuses warm Redis data while forced defe
     return redisSnapshots.read(source);
   } };
   const load = vi.fn(async () => { throw new RefreshDeferredError(Date.now() + 10000); });
-  const loaders = { blog: load, docs: load, youtube: load, changelog: load };
+  const loaders = { blog: load, docs: load, youtube: load, changelog: load, customers: load };
   const background = new SourceCache(loaders, slowStore);
   expect((await background.refresh('blog')).items[0].title).toBe('Saved content');
   expect(load).not.toHaveBeenCalled();

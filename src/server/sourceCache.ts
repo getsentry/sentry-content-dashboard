@@ -3,6 +3,10 @@ import { RefreshCoordinationError, RefreshDeferredError } from './cacheErrors';
 import { normalizeContent, type ContentSource, type SourcePayload, type SourceSnapshot } from '../utils/content';
 
 export const SOURCE_FRESHNESS_MS = 30000;
+// Sources backed by local storage rather than an upstream fetch. Reads are cheap
+// and must reflect the file as soon as a monitor run updates it, so they skip the
+// freshness window.
+const LOCAL_SOURCES = new Set<ContentSource>(['docs', 'customers']);
 export const SNAPSHOT_MAX_AGE_MS = 86400000;
 type Loader = (previous?: SourceSnapshot) => Promise<SourcePayload>;
 export interface SnapshotStore {
@@ -68,8 +72,9 @@ export class SourceCache {
   private async update(source: ContentSource, force: boolean, requestedAt: number) {
     if ((this.failures.get(source) || 0) > Date.now()) throw new Error(`${source} temporarily unavailable`);
     let previous = await this.read(source);
-    const minimumFetchedAt = force || source === 'docs' ? requestedAt : requestedAt - SOURCE_FRESHNESS_MS;
-    if (source !== 'docs' && !force && previous && Date.now() - previous.fetchedAt < SOURCE_FRESHNESS_MS) return previous;
+    const local = LOCAL_SOURCES.has(source);
+    const minimumFetchedAt = force || local ? requestedAt : requestedAt - SOURCE_FRESHNESS_MS;
+    if (!local && !force && previous && Date.now() - previous.fetchedAt < SOURCE_FRESHNESS_MS) return previous;
     try {
       let loaded: SourceSnapshot | undefined;
       let upstreamFailed = false;

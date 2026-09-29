@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint src tests vitest.config.mts",
     "monitor-docs": "node scripts/monitor-docs.js",
+    "monitor-customers": "node scripts/monitor-customers.js",
     "setup-github": "node scripts/setup-github-webhook.js",
     "setup-github-actions": "node scripts/setup-github-actions.js",
     "test-github": "node scripts/test-github-integration.js",
