@@ -123,19 +123,30 @@ export default function Home() {
     };
   }, [fetchContent]);
 
+  // Docs updates land far more often than the other sources, so they stay on the
+  // DOCUMENTATION tab only and are left out of ALL CONTENT and its counts.
+  const browsableContent = content.filter(item => item.source !== 'docs');
+
+  // The pool the category and search filters narrow down, i.e. the selected
+  // source ('all' covers every source except docs).
+  const sourceContent = selectedFilter === 'all'
+    ? browsableContent
+    : content.filter(item => item.source === selectedFilter);
+
   const getContentStats = () => {
     const blogCount = content.filter(item => item.source === 'blog').length;
     const youtubeCount = content.filter(item => item.source === 'youtube').length;
     const docsCount = content.filter(item => item.source === 'docs').length;
     const changelogCount = content.filter(item => item.source === 'changelog').length;
     const customersCount = content.filter(item => item.source === 'customers').length;
-    const totalCount = content.length;
+    const totalCount = browsableContent.length;
     
-    // Category statistics
+    // Category statistics, counted within the selected source so a tile always
+    // reports how many of the listed items it will narrow to.
     const categoryStats = CATEGORIES.map(category => ({
       id: category.id,
       name: category.name,
-      count: content.filter(item => item.categories.includes(category.id)).length,
+      count: sourceContent.filter(item => item.categories.includes(category.id)).length,
       color: category.color
     }));
     
@@ -143,12 +154,7 @@ export default function Home() {
   };
 
   const getFilteredContent = () => {
-    let filtered = content;
-    
-    // Filter by source
-    if (selectedFilter !== 'all') {
-      filtered = filtered.filter(item => item.source === selectedFilter);
-    }
+    let filtered = sourceContent;
     
     // Filter by category
     if (selectedCategory !== 'all') {
@@ -621,7 +627,7 @@ export default function Home() {
                   )}
                 </div>
                 <span className="text-green-400">
-                  {filteredContent.length} of {content.length} items
+                  {filteredContent.length} of {sourceContent.length} items
                 </span>
               </div>
             </div>
