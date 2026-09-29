@@ -127,6 +127,12 @@ export default function Home() {
   // DOCUMENTATION tab only and are left out of ALL CONTENT and its counts.
   const browsableContent = content.filter(item => item.source !== 'docs');
 
+  // The pool the category and search filters narrow down, i.e. the selected
+  // source ('all' covers every source except docs).
+  const sourceContent = selectedFilter === 'all'
+    ? browsableContent
+    : content.filter(item => item.source === selectedFilter);
+
   const getContentStats = () => {
     const blogCount = content.filter(item => item.source === 'blog').length;
     const youtubeCount = content.filter(item => item.source === 'youtube').length;
@@ -134,22 +140,17 @@ export default function Home() {
     const changelogCount = content.filter(item => item.source === 'changelog').length;
     const totalCount = browsableContent.length;
     
-    // Category statistics
+    // Category statistics, counted within the selected source so a tile always
+    // reports how many of the listed items it will narrow to.
     const categoryStats = CATEGORIES.map(category => ({
       id: category.id,
       name: category.name,
-      count: browsableContent.filter(item => item.categories.includes(category.id)).length,
+      count: sourceContent.filter(item => item.categories.includes(category.id)).length,
       color: category.color
     }));
     
     return { blogCount, youtubeCount, docsCount, changelogCount, totalCount, categoryStats };
   };
-
-  // The pool the category and search filters narrow down, i.e. the selected
-  // source ('all' covers every source except docs).
-  const sourceContent = selectedFilter === 'all'
-    ? browsableContent
-    : content.filter(item => item.source === selectedFilter);
 
   const getFilteredContent = () => {
     let filtered = sourceContent;
