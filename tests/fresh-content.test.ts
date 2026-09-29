@@ -31,16 +31,16 @@ test('publishes ready content while the slow source is still pending', async () 
   await vi.waitFor(() => expect(progress).toHaveLength(1));
   expect(progress[0].items[0].source).toBe('docs');
   expect(progress[0].pendingSources).toContain('blog');
-  for (const source of ['blog', 'changelog'] as const) controller.enqueue(line(event(source)));
+  for (const source of ['blog', 'changelog', 'customers'] as const) controller.enqueue(line(event(source)));
   controller.enqueue(line({ type: 'error', source: 'youtube' }));
   controller.enqueue(line({ type: 'done' })); controller.close();
   const result = await loading;
-  expect(result.items).toHaveLength(3); expect(result.failedSources).toEqual(['youtube']);
+  expect(result.items).toHaveLength(4); expect(result.failedSources).toEqual(['youtube']);
 });
 test('snapshot is replaced by fresh data in the same visit without duplicates', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => stream([
     event('docs', 'Snapshot', true), event('docs', 'Updated'),
-    ...(['blog', 'youtube', 'changelog'] as const).map(source => event(source)), { type: 'done' },
+    ...(['blog', 'youtube', 'changelog', 'customers'] as const).map(source => event(source)), { type: 'done' },
   ])));
   const progress: DashboardContent[] = [];
   const result = await loadDashboardContent(new AbortController().signal, value => progress.push(value));
@@ -51,7 +51,7 @@ test('truncated stream retains delivered content and flags missing sources', asy
   vi.stubGlobal('fetch', vi.fn(async () => stream([event('docs')])));
   const result = await loadDashboardContent(new AbortController().signal);
   expect(result.items).toHaveLength(1);
-  expect(result.failedSources).toEqual(['blog', 'youtube', 'changelog']);
+  expect(result.failedSources).toEqual(['blog', 'youtube', 'changelog', 'customers']);
 });
 test('handles records split across chunks including multibyte text', async () => {
   const bytes = encoder.encode([...CONTENT_SOURCES.map(source => event(source, 'Fresh 🎉')), { type: 'done' }].map(e => JSON.stringify(e)).join('\n'));
@@ -66,7 +66,7 @@ test('quota deferral preserves saved content and settles pending status', async 
   const youtube = event('youtube', 'Saved');
   if (youtube.type === 'source') youtube.snapshot.refreshDeferredUntil = Date.now() + 10000;
   vi.stubGlobal('fetch', vi.fn(async () => stream([
-    youtube, ...(['blog', 'docs', 'changelog'] as const).map(source => event(source)), { type: 'done' },
+    youtube, ...(['blog', 'docs', 'changelog', 'customers'] as const).map(source => event(source)), { type: 'done' },
   ])));
   const result = await loadDashboardContent(new AbortController().signal);
   expect(result.deferredSources).toEqual(['youtube']);
@@ -79,7 +79,7 @@ test('busy source retains content, settles the spinner, and exposes retry warnin
   const busy = event('blog', 'Saved');
   if (busy.type === 'source') busy.snapshot.refreshBusy = true;
   vi.stubGlobal('fetch', vi.fn(async () => stream([
-    busy, ...(['youtube', 'docs', 'changelog'] as const).map(source => event(source)), { type: 'done' },
+    busy, ...(['youtube', 'docs', 'changelog', 'customers'] as const).map(source => event(source)), { type: 'done' },
   ])));
   const result = await loadDashboardContent(new AbortController().signal);
   expect(result.failedSources).toEqual(['blog']);
@@ -101,7 +101,7 @@ test('partial stream timeout is reported while retaining delivered content', asy
   const result = await loading;
   expect(Sentry.captureException).toHaveBeenCalledExactlyOnceWith(timeout);
   expect(result.items).toHaveLength(1);
-  expect(result.failedSources).toEqual(['blog', 'youtube', 'changelog']);
+  expect(result.failedSources).toEqual(['blog', 'youtube', 'changelog', 'customers']);
 });
 test('malformed events after partial content report the protocol error', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({ start(controller) {

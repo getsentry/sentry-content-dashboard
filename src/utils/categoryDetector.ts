@@ -91,6 +91,10 @@ export function detectCategories(title: string, description: string, source: str
       case 'docs':
         detectedCategories.push('technical');
         break;
+      case 'customers':
+        // Customer stories are case studies, which read as business content.
+        detectedCategories.push('business');
+        break;
       case 'youtube':
         // YouTube content is often technical or business-related
         if (text.includes('tutorial') || text.includes('how') || text.includes('guide')) {

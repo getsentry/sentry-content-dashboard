@@ -22,7 +22,7 @@ const KV_KEY = 'docs-changelog';
 const changelogFile = () => path.join(process.cwd(), 'data', 'docs-changelog.json');
 let redisConnection: Promise<Redis> | undefined;
 
-function usesRedis() {
+export function usesRedis() {
   if (process.env.REDIS_URL) return true;
   if (process.env.VERCEL) throw new Error('REDIS_URL is required on Vercel');
   return false;

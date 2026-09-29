@@ -3,7 +3,7 @@ import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
   async headers() {
-    return ['content', 'blog', 'youtube', 'docs', 'changelog', 'docs/feed', 'export/markdown'].map(route => ({
+    return ['content', 'blog', 'youtube', 'docs', 'changelog', 'customers', 'docs/feed', 'export/markdown'].map(route => ({
       source: `/api/${route}`,
       headers: [{ key: 'Cache-Control', value: 'no-store, no-transform, max-age=0' }],
     }));
@@ -13,6 +13,13 @@ const nextConfig: NextConfig = {
       {
         protocol: 'https',
         hostname: 'i.ytimg.com',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        // Customer story og:image headers
+        protocol: 'https',
+        hostname: 'sentry.io',
         port: '',
         pathname: '/**',
       },

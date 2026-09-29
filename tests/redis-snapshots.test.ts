@@ -19,7 +19,7 @@ beforeEach(() => { redis.data.clear(); vi.clearAllMocks(); });
 test('two separate workers coordinate one shared source refresh', async () => {
   let finish!: (value: { items: unknown[] }) => void;
   const load = vi.fn(() => new Promise<{ items: unknown[] }>(resolve => { finish = resolve; }));
-  const loaders = { blog: load, docs: load, youtube: load, changelog: load };
+  const loaders = { blog: load, docs: load, youtube: load, changelog: load, customers: load };
   const first = new SourceCache(loaders, redisSnapshots);
   const second = new SourceCache(loaders, redisSnapshots);
   const a = first.refresh('blog', true); const b = second.refresh('blog', true);

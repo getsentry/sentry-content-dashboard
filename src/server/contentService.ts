@@ -3,13 +3,14 @@ import { load as blog } from './sources/blog';
 import { load as youtube } from './sources/youtube';
 import { load as docs } from './sources/docs';
 import { load as changelog } from './sources/changelog';
+import { load as customers } from './sources/customers';
 import { SourceCache } from './sourceCache';
 import { redisSnapshots } from './redisSnapshots';
 import { CONTENT_SOURCES, type ContentSource, type ContentEvent } from '../utils/content';
 
 const processState = globalThis as typeof globalThis & { contentCacheV1?: SourceCache };
 export const contentCache = processState.contentCacheV1 ??= new SourceCache(
-  { blog, youtube, docs, changelog }, process.env.REDIS_URL ? redisSnapshots : undefined,
+  { blog, youtube, docs, changelog, customers }, process.env.REDIS_URL ? redisSnapshots : undefined,
 );
 
 export async function refreshSource(source: ContentSource, force = false) {

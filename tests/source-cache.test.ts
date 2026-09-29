@@ -3,7 +3,7 @@ import { SourceCache, type SnapshotStore } from '../src/server/sourceCache';
 import { load as blog } from '../src/server/sources/blog';
 import { load as changelog } from '../src/server/sources/changelog';
 const item = (title: string) => ({ title, url: 'https://example.com/post', publishedAt: new Date().toISOString() });
-const loaders = (load: () => Promise<{ items: unknown[] }>) => ({ blog: load, docs: load, youtube: load, changelog: load });
+const loaders = (load: () => Promise<{ items: unknown[] }>) => ({ blog: load, docs: load, youtube: load, changelog: load, customers: load });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 test('simultaneous dashboard/export reads share a single upstream request', async () => {
   let resolve!: (value: { items: unknown[] }) => void;

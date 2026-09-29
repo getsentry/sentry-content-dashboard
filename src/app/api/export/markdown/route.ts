@@ -1,7 +1,7 @@
 import { markdownText } from '../../../../server/markdownText';
 import * as Sentry from '@sentry/nextjs';
 import { NextResponse } from 'next/server';
-import { collectContent, type ContentItem } from '../../../../utils/content';
+import { collectContent, CONTENT_SOURCES, type ContentItem } from '../../../../utils/content';
 import { refreshSource } from '../../../../server/contentService';
 
 export const dynamic = 'force-dynamic';
@@ -20,8 +20,9 @@ export async function GET() {
     };
     const { items, failedSources } = await collectContent({
       blog: load('blog'), youtube: load('youtube'), docs: load('docs'), changelog: load('changelog'),
+      customers: load('customers'),
     });
-    if (failedSources.length === 4) {
+    if (failedSources.length === CONTENT_SOURCES.length) {
       return NextResponse.json({ error: 'All content sources are unavailable' }, { status: 503 });
     }
     const warning = failedSources.length
@@ -64,7 +65,8 @@ function generateMarkdown(content: ContentItem[]): string {
     blog: content.filter(item => item.source === 'blog'),
     youtube: content.filter(item => item.source === 'youtube'),
     docs: content.filter(item => item.source === 'docs'),
-    changelog: content.filter(item => item.source === 'changelog')
+    changelog: content.filter(item => item.source === 'changelog'),
+    customers: content.filter(item => item.source === 'customers')
   };
 
   // Blog Posts Section
@@ -117,12 +119,26 @@ function generateMarkdown(content: ContentItem[]): string {
     });
   }
 
+  // Customer Stories Section
+  if (groupedContent.customers.length > 0) {
+    markdown += `## 🏆 Customer Stories (${groupedContent.customers.length})\n\n`;
+    groupedContent.customers.forEach((story, index) => {
+      markdown += `### ${index + 1}. ${markdownText(story.title)}\n`;
+      markdown += `- **URL**: ${markdownText(story.url)}\n`;
+      // Customer stories carry no upstream date; this is when they were first seen.
+      markdown += `- **First Seen**: ${story.publishedAt}\n`;
+      if (story.description) markdown += `- **Description**: ${markdownText(story.description)}\n`;
+      markdown += `\n`;
+    });
+  }
+
   // Summary
   markdown += `## 📊 Summary\n\n`;
   markdown += `- **Blog Posts**: ${groupedContent.blog.length}\n`;
   markdown += `- **YouTube Videos**: ${groupedContent.youtube.length}\n`;
   markdown += `- **Documentation**: ${groupedContent.docs.length}\n`;
   markdown += `- **Changelog Updates**: ${groupedContent.changelog.length}\n`;
+  markdown += `- **Customer Stories**: ${groupedContent.customers.length}\n`;
   markdown += `- **Total Content Items**: ${content.length}\n\n`;
   
   markdown += `---\n`;

@@ -8,7 +8,7 @@ test('normalizes static docs into the UI contract', () => {
   expect(Array.isArray(item.categories)).toBe(true);
 });
 test('keeps successful sources when another fails or has invalid data', async () => {
-  const result = await collectContent({ blog: async () => [], docs: async () => [page], youtube: async () => { throw Error('unavailable'); }, changelog: async () => [{}] });
+  const result = await collectContent({ blog: async () => [], docs: async () => [page], youtube: async () => { throw Error('unavailable'); }, changelog: async () => [{}], customers: async () => [] });
   expect(result.items).toHaveLength(1);
   expect(result.failedSources).toEqual(['youtube', 'changelog']);
 });

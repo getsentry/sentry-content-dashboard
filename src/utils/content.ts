@@ -1,6 +1,6 @@
 import { detectCategories } from './categoryDetector';
 
-export const CONTENT_SOURCES = ['blog', 'youtube', 'docs', 'changelog'] as const;
+export const CONTENT_SOURCES = ['blog', 'youtube', 'docs', 'changelog', 'customers'] as const;
 export type ContentSource = typeof CONTENT_SOURCES[number];
 export interface ContentItem {
   id: string;
