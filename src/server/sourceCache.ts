@@ -6,7 +6,7 @@ export const SOURCE_FRESHNESS_MS = 30000;
 // Sources backed by local storage rather than an upstream fetch. Reads are cheap
 // and must reflect the file as soon as a monitor run updates it, so they skip the
 // freshness window.
-const LOCAL_SOURCES = new Set<ContentSource>(['docs', 'customers']);
+const LOCAL_SOURCES = new Set<ContentSource>(['docs']);
 export const SNAPSHOT_MAX_AGE_MS = 86400000;
 type Loader = (previous?: SourceSnapshot) => Promise<SourcePayload>;
 export interface SnapshotStore {

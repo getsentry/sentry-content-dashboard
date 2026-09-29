@@ -1,7 +1,7 @@
 {
-  "stories": [],
-  "newStories": [],
-  "knownUrls": [
+  "comment": "Baseline floor: the customer stories that existed when this source was added. Never displayed, and never re-surfaced as new even if runtime state is lost. Regenerate with `npm run seed-customers`.",
+  "generatedAt": "2026-09-29T20:41:03.968Z",
+  "baselineUrls": [
     "https://sentry.io/customers/adroll/",
     "https://sentry.io/customers/airtable/",
     "https://sentry.io/customers/animation-digital-network/",
@@ -84,6 +84,5 @@
     "https://sentry.io/customers/volley/",
     "https://sentry.io/customers/wellhub/",
     "https://sentry.io/customers/yuki/"
-  ],
-  "lastChecked": "2026-09-29T20:41:03.968Z"
+  ]
 }

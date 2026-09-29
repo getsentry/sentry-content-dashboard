@@ -4,23 +4,52 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { normalizeContent } from '../src/utils/content';
+import { isStoryUrl, load } from '../src/server/sources/customers';
+import { getCustomerStoryState, resetBaselineCache } from '../src/utils/customerStoryStorage';
 const require = createRequire(import.meta.url);
-const { checkForNewStories, isStoryUrl } = require('../scripts/monitor-customers.js');
+const { seedBaseline } = require('../scripts/seed-customer-baseline.js');
+
+const SITEMAP = 'https://sentry.io/sitemap/sitemap-0.xml';
+const url = (slug: string) => `https://sentry.io/customers/${slug}/`;
 
 let directory: string;
-let storageFile: string;
+let cwd: ReturnType<typeof vi.spyOn>;
 beforeEach(async () => {
   directory = await mkdtemp(path.join(tmpdir(), 'customer-stories-'));
-  storageFile = path.join(directory, 'customer-stories.json');
+  await mkdir(path.join(directory, 'data'), { recursive: true });
+  cwd = vi.spyOn(process, 'cwd').mockReturnValue(directory);
+  resetBaselineCache();
 });
-afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+afterEach(async () => {
+  cwd.mockRestore();
+  resetBaselineCache();
+  vi.unstubAllGlobals();
+  await rm(directory, { recursive: true, force: true });
+});
 
-const story = (slug: string) => ({ url: `https://sentry.io/customers/${slug}/` });
-const read = async () => JSON.parse(await readFile(storageFile, 'utf8'));
-const details = async (entry: { url: string }, discoveredAt: string) => ({
-  url: entry.url, title: `Story ${entry.url}`, description: 'How they use Sentry',
-  publishedAt: discoveredAt, source: 'customers',
-});
+const writeBaseline = (urls: string[]) => writeFile(
+  path.join(directory, 'data', 'customer-stories.json'), JSON.stringify({ baselineUrls: urls }));
+const readState = async () => JSON.parse(
+  await readFile(path.join(directory, 'data', 'customer-stories-state.json'), 'utf8'));
+
+const sitemap = (urls: string[]) =>
+  `<urlset>${urls.map(one => `<url><loc>${one}</loc></url>`).join('')}</urlset>`;
+const page = (title: string) =>
+  `<html><head><meta property="og:title" content="${title}">` +
+  `<meta property="og:description" content="How they use Sentry &amp; win">` +
+  `<meta property="og:image" content="https://sentry.io/image.webp"></head></html>`;
+
+/** Serves the sitemap and a page per story, counting every request. */
+function serve(urls: string[], options: { failing?: string[] } = {}) {
+  const requests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (target: string) => {
+    requests.push(target);
+    if (target === SITEMAP) return new Response(sitemap(urls));
+    if (options.failing?.includes(target)) return new Response('nope', { status: 500 });
+    return new Response(page(`Story for ${target}`));
+  }));
+  return requests;
+}
 
 test.each([
   ['https://sentry.io/customers/', 'the index page itself'],
@@ -28,107 +57,156 @@ test.each([
   ['https://sentry.io/pricing/', 'an unrelated page'],
   ['https://evil.test/customers/acme/', 'another origin'],
   ['https://sentry.io.evil.test/customers/acme/', 'a lookalike origin'],
-])('rejects %s as a story URL (%s)', url => {
-  expect(isStoryUrl(url)).toBe(false);
+  ['not a url', 'unparseable input'],
+])('rejects %s as a story URL (%s)', target => {
+  expect(isStoryUrl(target)).toBe(false);
 });
 test('accepts a story URL with or without a trailing slash', () => {
-  expect(isStoryUrl('https://sentry.io/customers/acme/')).toBe(true);
+  expect(isStoryUrl(url('acme'))).toBe(true);
   expect(isStoryUrl('https://sentry.io/customers/acme')).toBe(true);
 });
 
-test('first run records the existing catalogue without displaying any of it', async () => {
-  const fetchStoryDetails = vi.fn(details);
-  const displayed = await checkForNewStories({
-    storageFile, fetchSitemap: async () => [story('acme'), story('globex')], fetchStoryDetails,
-  });
-  expect(displayed).toEqual([]);
-  // Nothing is fetched or shown on the seeding run: the catalogue is only baselined.
-  expect(fetchStoryDetails).not.toHaveBeenCalled();
-  const storage = await read();
-  expect(storage.stories).toEqual([]);
-  expect(storage.knownUrls).toHaveLength(2);
+test('the first poll adopts the live catalogue as the baseline and displays none of it', async () => {
+  await writeBaseline([]);
+  const requests = serve([url('acme'), url('globex')]);
+
+  expect((await load()).items).toEqual([]);
+  // Seeding never fetches story pages: the catalogue is only baselined.
+  expect(requests).toEqual([SITEMAP]);
+  const state = await readState();
+  expect(state.stories).toEqual([]);
+  expect(state.knownUrls).toHaveLength(2);
 });
 
 test('a story appearing after the baseline is displayed and dated on discovery', async () => {
-  let pages = [story('acme')];
-  const options = { storageFile, fetchSitemap: async () => pages, fetchStoryDetails: details };
-  await checkForNewStories(options);
+  await writeBaseline([url('acme')]);
   const before = Date.now();
+  serve([url('acme'), url('newco')]);
 
-  pages = [story('acme'), story('newco')];
-  const displayed = await checkForNewStories(options);
-
-  expect(displayed.map((item: { url: string }) => item.url)).toEqual(['https://sentry.io/customers/newco/']);
-  const storage = await read();
-  expect(storage.stories).toHaveLength(1);
-  const discoveredAt = Date.parse(storage.stories[0].publishedAt);
+  const { items } = await load();
+  expect(items).toHaveLength(1);
+  expect(items[0].url).toBe(url('newco'));
+  expect(items[0].title).toBe(`Story for ${url('newco')}`);
+  expect(items[0].thumbnail).toBe('https://sentry.io/image.webp');
+  // HTML entities in og: tags are decoded rather than shown raw.
+  expect(items[0].description).toBe('How they use Sentry & win');
+  const discoveredAt = Date.parse(items[0].publishedAt);
   expect(discoveredAt).toBeGreaterThanOrEqual(before);
   expect(discoveredAt).toBeLessThanOrEqual(Date.now());
 });
 
-test('a story already seen is never displayed again', async () => {
-  const pages = [story('acme'), story('newco')];
-  const options = { storageFile, fetchSitemap: async () => [story('acme')], fetchStoryDetails: details };
-  await checkForNewStories(options);
-  await checkForNewStories({ ...options, fetchSitemap: async () => pages });
-  expect(await checkForNewStories({ ...options, fetchSitemap: async () => pages })).toEqual([]);
-  expect((await read()).stories).toHaveLength(1);
+test('a baselined story is never displayed, even once others have been discovered', async () => {
+  await writeBaseline([url('acme')]);
+  serve([url('acme'), url('newco')]);
+  await load();
+
+  resetBaselineCache();
+  serve([url('acme'), url('newco')]);
+  const { items } = await load();
+  expect(items.map(item => item.url)).toEqual([url('newco')]);
 });
 
-test('a story whose page fails stays out of the baseline so the next run retries it', async () => {
-  const options = { storageFile, fetchSitemap: async () => [story('acme')], fetchStoryDetails: details };
-  await checkForNewStories(options);
+test('the baseline floor keeps the catalogue hidden when runtime state is lost', async () => {
+  await writeBaseline([url('acme'), url('globex')]);
+  // State was discarded (a flushed cache), but the committed floor remains.
+  const requests = serve([url('acme'), url('globex'), url('newco')]);
 
-  const pages = [story('acme'), story('newco')];
-  await expect(checkForNewStories({
-    ...options, fetchSitemap: async () => pages, fetchStoryDetails: async () => null,
-  })).rejects.toThrow('1 stories failed');
-  expect((await read()).knownUrls).not.toContain('https://sentry.io/customers/newco/');
+  const { items } = await load();
+  expect(items.map(item => item.url)).toEqual([url('newco')]);
+  // Only the genuinely new story is fetched; the floor is not re-walked.
+  expect(requests).toEqual([SITEMAP, url('newco')]);
+});
 
-  const retried = await checkForNewStories({ ...options, fetchSitemap: async () => pages });
-  expect(retried).toHaveLength(1);
+test('a later poll within the interval serves stored stories without refetching', async () => {
+  await writeBaseline([url('acme')]);
+  serve([url('acme'), url('newco')]);
+  await load();
+
+  const requests = serve([url('acme'), url('newco'), url('thirdco')]);
+  const { items } = await load();
+  expect(requests).toEqual([]);
+  expect(items.map(item => item.url)).toEqual([url('newco')]);
+});
+
+test('a story whose page fails is retried on the next poll instead of being lost', async () => {
+  await writeBaseline([url('acme')]);
+  serve([url('acme'), url('newco')], { failing: [url('newco')] });
+  expect((await load()).items).toEqual([]);
+  expect((await readState()).knownUrls).not.toContain(url('newco'));
+
+  // A failed page leaves lastPolledAt set, so force the next poll past the interval.
+  const state = await readState();
+  await writeFile(path.join(directory, 'data', 'customer-stories-state.json'),
+    JSON.stringify({ ...state, lastPolledAt: 0 }));
+  serve([url('acme'), url('newco')]);
+  expect((await load()).items.map(item => item.url)).toEqual([url('newco')]);
+});
+
+test('a sitemap outage serves stored stories rather than clearing them', async () => {
+  await writeBaseline([url('acme')]);
+  serve([url('acme'), url('newco')]);
+  await load();
+  const stored = await readState();
+
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+  await writeFile(path.join(directory, 'data', 'customer-stories-state.json'),
+    JSON.stringify({ ...stored, lastPolledAt: 0 }));
+  const { items } = await load();
+  expect(items.map(item => item.url)).toEqual([url('newco')]);
+  expect((await readState()).knownUrls).toContain(url('newco'));
 });
 
 test('an empty sitemap leaves the baseline untouched instead of re-displaying everything', async () => {
-  const options = { storageFile, fetchSitemap: async () => [story('acme')], fetchStoryDetails: details };
-  await checkForNewStories(options);
-  const before = await read();
-  await expect(checkForNewStories({ ...options, fetchSitemap: async () => [] }))
-    .rejects.toThrow('No customer stories in sitemap');
-  expect(await read()).toEqual(before);
+  await writeBaseline([url('acme')]);
+  serve([url('acme'), url('newco')]);
+  await load();
+  const before = await readState();
+
+  await writeFile(path.join(directory, 'data', 'customer-stories-state.json'),
+    JSON.stringify({ ...before, lastPolledAt: 0 }));
+  serve([]);
+  expect((await load()).items.map(item => item.url)).toEqual([url('newco')]);
 });
 
-test('corrupt storage is rejected rather than silently reseeded', async () => {
-  await writeFile(storageFile, JSON.stringify({ stories: 'not an array' }));
-  await expect(checkForNewStories({ storageFile, fetchSitemap: async () => [story('acme')] }))
-    .rejects.toThrow('Invalid customer story storage');
+test('stories are served newest first', async () => {
+  await writeBaseline([]);
+  await writeFile(path.join(directory, 'data', 'customer-stories-state.json'), JSON.stringify({
+    knownUrls: [url('older'), url('newer')], lastPolledAt: Date.now(),
+    stories: [
+      { url: url('older'), title: 'Older', description: '', publishedAt: '2026-09-01T00:00:00.000Z', source: 'customers' },
+      { url: url('newer'), title: 'Newer', description: '', publishedAt: '2026-09-20T00:00:00.000Z', source: 'customers' },
+    ],
+  }));
+  expect((await load()).items.map(item => item.title)).toEqual(['Newer', 'Older']);
 });
 
-test('the source loader normalizes stored stories for the dashboard', async () => {
-  const cwd = vi.spyOn(process, 'cwd').mockReturnValue(directory);
-  try {
-    const dataDirectory = path.join(directory, 'data');
-    await rm(dataDirectory, { recursive: true, force: true });
-    const { load } = await import('../src/server/sources/customers');
-    // No storage file yet: an unmonitored deploy shows nothing rather than failing.
-    expect((await load()).items).toEqual([]);
+test('corrupt runtime state is rejected rather than silently reseeded', async () => {
+  await writeBaseline([url('acme')]);
+  await writeFile(path.join(directory, 'data', 'customer-stories-state.json'),
+    JSON.stringify({ knownUrls: 'not an array', stories: [] }));
+  await expect(getCustomerStoryState()).rejects.toThrow('Invalid customer story state');
+});
 
-    await mkdir(dataDirectory, { recursive: true });
-    await writeFile(path.join(dataDirectory, 'customer-stories.json'), JSON.stringify({
-      stories: [
-        { url: 'https://sentry.io/customers/older/', title: 'Older', description: '', publishedAt: '2026-09-01T00:00:00.000Z' },
-        { url: 'https://sentry.io/customers/newer/', title: 'Newer', description: '', publishedAt: '2026-09-20T00:00:00.000Z' },
-      ],
-    }));
-    const { items } = await load();
-    expect(items.map(item => item.title)).toEqual(['Newer', 'Older']);
-    expect(items.every(item => item.source === 'customers')).toBe(true);
-  } finally { cwd.mockRestore(); }
+test('a missing baseline file leaves the source empty rather than failing', async () => {
+  const state = await getCustomerStoryState();
+  expect(state).toEqual({ knownUrls: [], stories: [], lastPolledAt: 0 });
+});
+
+test('re-seeding the baseline is refused unless forced, to avoid suppressing new stories', async () => {
+  const baselineFile = path.join(directory, 'data', 'customer-stories.json');
+  const fetchStoryUrls = async () => [url('acme'), url('newco')];
+  await seedBaseline({ baselineFile, fetchStoryUrls });
+  expect(JSON.parse(await readFile(baselineFile, 'utf8')).baselineUrls).toHaveLength(2);
+
+  await expect(seedBaseline({ baselineFile, fetchStoryUrls: async () => [url('acme')] }))
+    .rejects.toThrow('pass --force to overwrite');
+  await seedBaseline({ baselineFile, fetchStoryUrls: async () => [url('acme')], force: true });
+  expect(JSON.parse(await readFile(baselineFile, 'utf8')).baselineUrls).toEqual([url('acme')]);
 });
 
 test('customer stories are categorised as business content', () => {
   const [item] = normalizeContent([{
-    url: 'https://sentry.io/customers/acme/', title: 'How Acme ships faster',
+    url: url('acme'), title: 'How Acme ships faster',
     description: 'A story about shipping', publishedAt: '2026-09-20T00:00:00.000Z',
   }], 'customers');
   expect(item.categories).toContain('business');
