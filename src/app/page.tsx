@@ -79,7 +79,7 @@ export default function Home() {
       if (controller.signal.aborted) return;
       setFailedSources(result.failedSources);
       setDeferredSources(result.deferredSources);
-      if (result.failedSources.length === 4 && !result.items.length) throw new Error('All content sources are unavailable');
+      if (result.failedSources.length === CONTENT_SOURCES.length && !result.items.length) throw new Error('All content sources are unavailable');
       setError(null);
       currentContent.current = result.items;
       setContent(result.items);
