@@ -80,3 +80,17 @@ test('cold forced refresh does not accept an old Redis snapshot when previous re
   expect(await redisSnapshots.refresh('blog', undefined, load, Date.now())).toEqual(fresh);
   expect(load).toHaveBeenCalledOnce();
 });
+
+test('customers snapshots are versioned apart from the abandoned empty ones', async () => {
+  // v1 deliberately cached an empty catalogue and those entries outlive a deploy
+  // by up to 24 hours, so the source must not read them back.
+  redis.data.set('content:v1:customers', JSON.stringify({ items: [], fetchedAt: Date.now() }));
+  const load = vi.fn().mockResolvedValue({
+    items: [{ title: 'Story', url: 'https://sentry.io/customers/acme/', publishedAt: '2026-09-20' }],
+  });
+  const cache = new SourceCache(
+    { blog: load, docs: load, youtube: load, changelog: load, customers: load }, redisSnapshots);
+  const snapshot = await cache.refresh('customers', true);
+  expect(snapshot.items).toHaveLength(1);
+  expect(redis.data.has('content:v2:customers')).toBe(true);
+});
