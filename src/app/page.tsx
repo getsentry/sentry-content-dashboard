@@ -690,7 +690,6 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
   const isDocs = item.source === 'docs';
   const isChangelog = item.source === 'changelog';
   const isCustomers = item.source === 'customers';
-  // For customer stories this is the discovery date: they carry no upstream date.
   const publishedDate = contentDate.format(new Date(item.publishedAt));
   
   return (

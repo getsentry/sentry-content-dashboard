@@ -17,9 +17,16 @@ const nextConfig: NextConfig = {
         pathname: '/**',
       },
       {
-        // Customer story og:image headers
+        // Customer story card images
         protocol: 'https',
         hostname: 'sentry.io',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        // Video thumbnails on customer story cards
+        protocol: 'https',
+        hostname: 'i.vimeocdn.com',
         port: '',
         pathname: '/**',
       },
