@@ -102,7 +102,19 @@ function generateMarkdown(content: ContentItem[]): string {
       markdown += `### ${index + 1}. ${markdownText(doc.title)}\n`;
       markdown += `- **URL**: ${markdownText(doc.url)}\n`;
       markdown += `- **Last Modified**: ${doc.lastModified || doc.publishedAt}\n`;
-      if (doc.description) markdown += `- **Description**: ${markdownText(doc.description)}\n`;
+      // A digest carries its commits; listing them beats the joined description,
+      // which repeats the same summaries as one unreadable line.
+      if (doc.commits?.length) {
+        markdown += `- **Changes** (${doc.commits.length}):\n`;
+        doc.commits.forEach(commit => {
+          markdown += `  - ${markdownText(commit.title)}\n`;
+          markdown += `    - **URL**: ${markdownText(commit.url)}\n`;
+          if (commit.author) markdown += `    - **Author**: ${markdownText(commit.author)}\n`;
+          if (commit.summary) markdown += `    - **Summary**: ${markdownText(commit.summary)}\n`;
+        });
+      } else if (doc.description) {
+        markdown += `- **Description**: ${markdownText(doc.description)}\n`;
+      }
       markdown += `\n`;
     });
   }

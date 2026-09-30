@@ -1,5 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
-import { getChangelogEntries, saveChangelogEntry as saveToStorage } from './changelogStorage';
+import { getChangelogEntries, saveDigestCommit } from './changelogStorage';
+import { containsCommit } from './docsDigest';
+import type { DigestCommit } from './content';
 
 // Lazy imports to handle missing dependencies
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -60,24 +62,9 @@ interface Commit {
 }
 
 
-interface ChangelogEntry {
-  id: string;
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-  source: 'changelog';
-  categories: string[];
-  commitId: string;
-  author: string;
-  filesChanged: {
-    added: string[];
-    removed: string[];
-    modified: string[];
-  };
-  aiSummary: string;
-}
-
+const isDocFile = (filename: string) =>
+  filename.endsWith('.md') || filename.endsWith('.mdx') ||
+  filename.includes('/docs/') || filename.includes('/documentation/');
 
 export async function processDocsChanges(input: { id: string }): Promise<boolean> {
   try {
@@ -86,7 +73,7 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
       throw new Error('GitHub integration not configured');
     }
 
-    if ((await getChangelogEntries()).some(entry => entry.id === `docs-${input.id}`)) return true;
+    if (containsCommit(await getChangelogEntries(), input.id)) return true;
 
     // Get detailed commit information
     const commitDetails = await octokitClient.rest.repos.getCommit({
@@ -98,13 +85,13 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
     // Trust GitHub's commit data, not caller-supplied titles, links, authors, or dates.
     const data = commitDetails.data;
     const files = data.files || [];
-    const docFiles = files.filter((file: { filename: string }) =>
-      file.filename.endsWith('.md') || file.filename.endsWith('.mdx') ||
-      file.filename.includes('/docs/') || file.filename.includes('/documentation/'));
+    const docFiles = files.filter((file: { filename: string }) => isDocFile(file.filename));
     if (!docFiles.length) return false;
     const validDate = (...dates: unknown[]) => dates.find((date): date is string =>
       typeof date === 'string' && Number.isFinite(Date.parse(date)));
-    let timestamp = validDate(data.commit.author?.date, data.commit.committer?.date);
+    // Committer date first: it is when the commit landed on master, which is the
+    // day the digest files it under. Authoring can predate the merge by weeks.
+    let timestamp = validDate(data.commit.committer?.date, data.commit.author?.date);
     if (!timestamp) {
       // The repository endpoint permits nullable git-user metadata. The Git object
       // endpoint provides the authoritative dates; never label old content as new.
@@ -112,7 +99,7 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
         owner: 'getsentry', repo: 'sentry-docs', commit_sha: input.id,
       });
       if (gitCommit.sha !== data.sha) throw new Error('Canonical commit SHA mismatch');
-      timestamp = validDate(gitCommit.author?.date, gitCommit.committer?.date);
+      timestamp = validDate(gitCommit.committer?.date, gitCommit.author?.date);
     }
     if (!timestamp) throw new Error('Commit has no valid canonical timestamp');
     const commit: Commit = {
@@ -138,33 +125,23 @@ export async function processDocsChanges(input: { id: string }): Promise<boolean
     // Generate AI summary of changes
     const aiSummary = await generateAISummary(commit, docFiles);
 
-    // Create changelog entry
-    const changelogEntry: ChangelogEntry = {
-      id: `docs-${commit.id}`,
-      title: `Docs Update: ${commit.message.split('\n')[0]}`,
-      description: aiSummary,
-      url: commit.url,
-      publishedAt: commit.timestamp,
-      source: 'changelog',
-      categories: ['technical', 'documentation'],
-      commitId: commit.id,
+    // File this commit into the digest for the day it was merged.
+    const digestCommit: DigestCommit = {
+      id: commit.id,
+      title: commit.message.split('\n')[0],
+      summary: aiSummary,
       author: commit.author.name,
+      url: commit.url,
+      mergedAt: commit.timestamp,
       filesChanged: {
-        added: commit.added.filter(file => 
-          file.endsWith('.md') || file.endsWith('.mdx') || file.includes('/docs/')
-        ),
-        removed: commit.removed.filter(file => 
-          file.endsWith('.md') || file.endsWith('.mdx') || file.includes('/docs/')
-        ),
-        modified: commit.modified.filter(file => 
-          file.endsWith('.md') || file.endsWith('.mdx') || file.includes('/docs/')
-        ),
+        added: commit.added.filter(isDocFile),
+        removed: commit.removed.filter(isDocFile),
+        modified: commit.modified.filter(isDocFile),
       },
-      aiSummary,
     };
 
-    // Save to storage (Vercel KV in production, file in development)
-    await saveToStorage(changelogEntry);
+    // Save to storage (Redis in production, file in development)
+    await saveDigestCommit(digestCommit);
     Sentry.logger.info('Documentation commit processed', { commitId: commit.id, fileCount: docFiles.length });
 
     console.log(`Successfully processed commit ${commit.id}`);

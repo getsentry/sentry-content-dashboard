@@ -3,6 +3,8 @@ import { readFile, mkdir, rename, writeFile, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import type Redis from 'ioredis';
+import { mergeDigestCommit } from './docsDigest';
+import type { DigestCommit } from './content';
 
 export interface ChangelogEntry {
   aiSummary: string;
@@ -81,20 +83,38 @@ redis.call('SET', KEYS[1], ARGV[2])
 return 1
 `;
 
-function mergeEntry(entries: ChangelogEntry[], entry: ChangelogEntry) {
-  return [...entries.filter(old => old.id !== entry.id), entry]
+export const MAX_ENTRIES = 100;
+
+// Retention is applied once, here, so every writer shares the same policy.
+function retain(entries: ChangelogEntry[]) {
+  return [...entries]
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
-    .slice(0, 100);
+    .slice(0, MAX_ENTRIES);
+}
+
+function mergeEntry(entries: ChangelogEntry[], entry: ChangelogEntry) {
+  return [...entries.filter(old => old.id !== entry.id), entry];
 }
 
 export async function saveChangelogEntry(entry: ChangelogEntry): Promise<void> {
   // Reject invalid timestamps before attempting any write.
-  entry = { ...entry, publishedAt: new Date(entry.publishedAt).toISOString() };
+  const normalized = { ...entry, publishedAt: new Date(entry.publishedAt).toISOString() };
+  await mutateEntries(entries => mergeEntry(entries, normalized));
+}
+
+export async function saveDigestCommit(commit: DigestCommit): Promise<void> {
+  const normalized = { ...commit, mergedAt: new Date(commit.mergedAt).toISOString() };
+  await mutateEntries(entries => mergeDigestCommit(entries, normalized));
+}
+
+// Read-modify-write under each backend's own concurrency control. `mutate` is
+// re-applied to freshly read history on every attempt, so it must stay pure.
+async function mutateEntries(mutate: (entries: ChangelogEntry[]) => ChangelogEntry[]): Promise<void> {
   if (usesRedis()) {
     const redis = await getRedisClient();
     for (let attempt = 0; attempt < 30; attempt++) {
       const raw = await redis.get(KV_KEY);
-      const updated = mergeEntry(raw === null ? [] : parseEntries(raw), entry);
+      const updated = retain(mutate(raw === null ? [] : parseEntries(raw)));
       if (await redis.eval(COMPARE_AND_SET, 1, KV_KEY, raw ?? '', JSON.stringify(updated)) === 1) return;
     }
     throw new Error('Changelog write contention; retry delivery');
@@ -119,7 +139,7 @@ export async function saveChangelogEntry(entry: ChangelogEntry): Promise<void> {
   let writeFailed = false;
   try {
     const entries = await readLocalEntries();
-    const updated = mergeEntry(entries, entry);
+    const updated = retain(mutate(entries));
     await writeFile(temporary, JSON.stringify(updated, null, 2));
     await rename(temporary, file);
   } catch (error) {

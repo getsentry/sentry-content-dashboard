@@ -689,6 +689,9 @@ const contentDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'num
 // anyone west of UTC, so it is read back in the timezone it was built in.
 const calendarDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
+// Commits shown on a digest card before it collapses into a "+N more" line.
+const DIGEST_PREVIEW = 5;
+
 const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
   const isYouTube = item.source === 'youtube';
   const isDocs = item.source === 'docs';
@@ -773,12 +776,33 @@ const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
           {item.title}
         </h3>
         
-        {/* Description */}
-        {item.description && (
+        {/* Description — a daily digest lists its commits instead of one run-on line */}
+        {item.commits && item.commits.length > 0 ? (
+          <ul className="mb-3 sm:mb-4 space-y-1">
+            {item.commits.slice(0, DIGEST_PREVIEW).map((commit) => (
+              <li key={commit.id} className="flex gap-2 text-cyan-300 text-xs sm:text-sm font-['VT323']">
+                <span className="text-yellow-400 shrink-0" aria-hidden="true">▸</span>
+                <a
+                  href={commit.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="line-clamp-1 hover:text-yellow-300 transition-colors"
+                >
+                  {commit.title}
+                </a>
+              </li>
+            ))}
+            {item.commits.length > DIGEST_PREVIEW && (
+              <li className="pl-4 text-cyan-400 text-xs font-['VT323']">
+                +{item.commits.length - DIGEST_PREVIEW} more
+              </li>
+            )}
+          </ul>
+        ) : item.description ? (
           <p className="text-cyan-300 text-xs sm:text-sm mb-3 sm:mb-4 line-clamp-3 font-['VT323']">
             {item.description}
           </p>
-        )}
+        ) : null}
         
         {/* Author */}
         {item.author && (
