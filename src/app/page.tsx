@@ -684,13 +684,17 @@ export default function Home() {
 }
 
 const contentDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+// Customer stories are dated by calendar day, with no time of day behind it.
+// Formatting that in the viewer's timezone would show the day before for
+// anyone west of UTC, so it is read back in the timezone it was built in.
+const calendarDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
 const ContentCard = memo(function ContentCard({ item }: { item: ContentItem }) {
   const isYouTube = item.source === 'youtube';
   const isDocs = item.source === 'docs';
   const isChangelog = item.source === 'changelog';
   const isCustomers = item.source === 'customers';
-  const publishedDate = contentDate.format(new Date(item.publishedAt));
+  const publishedDate = (isCustomers ? calendarDate : contentDate).format(new Date(item.publishedAt));
   
   return (
     <div className={`bg-retro-card backdrop-blur-sm rounded-lg transition-all duration-300 hover:scale-105 ${

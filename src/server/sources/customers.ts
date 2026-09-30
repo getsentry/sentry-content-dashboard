@@ -43,8 +43,18 @@ const CARD_LENGTH = 2500;
 export function parseStories(html: string): ParsedStory[] {
   const stories: ParsedStory[] = [];
   const seen = new Set<string>();
-  for (const match of html.matchAll(CARD)) {
-    const card = html.slice(match.index + match[0].length, match.index + match[0].length + CARD_LENGTH);
+  const cards = [...html.matchAll(CARD)];
+  for (const [index, match] of cards.entries()) {
+    const start = match.index + match[0].length;
+    // Bound each card by its own closing tag, by where the next card starts and
+    // by a maximum length, so a card missing a field can never read its
+    // neighbour's title, date or image instead of being skipped.
+    const closing = html.indexOf('</a>', start);
+    const card = html.slice(start, Math.min(
+      closing === -1 ? html.length : closing,
+      cards[index + 1]?.index ?? html.length,
+      start + CARD_LENGTH,
+    ));
     const title = text(card.match(/<h3[^>]*>([\s\S]*?)<\/h3>/)?.[1]);
     const published = parseListingDate(text(card.match(/<p[^>]*class="[^"]*\buppercase\b[^"]*"[^>]*>([\s\S]*?)<\/p>/)?.[1]));
     if (!title || !published) continue;

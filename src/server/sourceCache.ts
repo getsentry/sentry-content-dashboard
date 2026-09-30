@@ -77,8 +77,12 @@ export class SourceCache {
     if ((this.failures.get(source) || 0) > Date.now()) throw new Error(`${source} temporarily unavailable`);
     let previous = await this.read(source);
     const freshness = SOURCE_FRESHNESS_OVERRIDES[source] ?? SOURCE_FRESHNESS_MS;
-    const minimumFetchedAt = force || !freshness ? requestedAt : requestedAt - freshness;
-    if (freshness && !force && previous && Date.now() - previous.fetchedAt < freshness) return previous;
+    // A source that sets its own interval treats it as a floor a forced refresh
+    // respects too, because the dashboard forces on every visit and re-reading a
+    // large page that changes monthly buys nothing.
+    const bypass = force && !(source in SOURCE_FRESHNESS_OVERRIDES);
+    const minimumFetchedAt = bypass || !freshness ? requestedAt : requestedAt - freshness;
+    if (freshness && !bypass && previous && Date.now() - previous.fetchedAt < freshness) return previous;
     try {
       let loaded: SourceSnapshot | undefined;
       let upstreamFailed = false;

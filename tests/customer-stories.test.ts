@@ -6,7 +6,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 /** A card in the shape the listing page serves. */
 function card({ slug, title, date, description = 'A story', image = `/_astro/${slug}.webp` }: {
-  slug: string; title: string; date: string; description?: string; image?: string | null;
+  slug: string; title: string | null; date: string | null; description?: string; image?: string | null;
 }) {
   return `<div data-original-index="0">
     <a href="/customers/${slug}/" class="customer-tile block relative bg-white rounded-lg">
@@ -14,8 +14,8 @@ function card({ slug, title, date, description = 'A story', image = `/_astro/${s
         ${image === null ? '' : `<img src="${image}" alt="${slug}" loading="lazy" class="w-full">`}
       </div>
       <div class="p-4 flex flex-col gap-2 flex-1">
-        <h3 class="text-[20px] font-semibold leading-[1.5] text-[#333232]"> ${title} </h3>
-        <p class="text-[14px] font-medium uppercase leading-[1.25] text-[#333232]"> ${date} </p>
+        ${title === null ? '' : `<h3 class="text-[20px] font-semibold leading-[1.5] text-[#333232]"> ${title} </h3>`}
+        ${date === null ? '' : `<p class="text-[14px] font-medium uppercase leading-[1.25] text-[#333232]"> ${date} </p>`}
         <p class="text-[14px] font-normal leading-[1.25] text-[#333232]"> ${description} </p>
       </div>
     </a>
@@ -95,6 +95,38 @@ test('a card missing a title or a usable date is skipped rather than guessed at'
     card({ slug: 'untitled', title: '', date: 'Feb 3, 2026' }),
   ]));
   expect(stories.map(story => story.id)).toEqual(['customers-good']);
+});
+
+test('a card with no date element does not inherit the next card\'s', () => {
+  const stories = parseStories(listing([
+    card({ slug: 'undated', title: 'Undated', date: null }),
+    card({ slug: 'dated', title: 'Dated', date: 'Feb 2, 2026' }),
+  ]));
+  expect(stories.map(story => story.id)).toEqual(['customers-dated']);
+});
+
+test('a card with unparseable date text is skipped', () => {
+  const stories = parseStories(listing([
+    card({ slug: 'undated', title: 'Undated', date: 'Coming soon' }),
+    card({ slug: 'dated', title: 'Dated', date: 'Feb 2, 2026' }),
+  ]));
+  expect(stories.map(story => story.id)).toEqual(['customers-dated']);
+});
+
+test('a card missing an image does not inherit the next card\'s', () => {
+  const stories = parseStories(listing([
+    card({ slug: 'imageless', title: 'Imageless', date: 'Feb 2, 2026', image: null }),
+    card({ slug: 'pictured', title: 'Pictured', date: 'Feb 3, 2026' }),
+  ]));
+  expect(stories.map(story => story.thumbnail)).toEqual([undefined, 'https://sentry.io/_astro/pictured.webp']);
+});
+
+test('a card missing its title does not inherit the next card\'s', () => {
+  const stories = parseStories(listing([
+    card({ slug: 'untitled', title: null, date: 'Feb 2, 2026' }),
+    card({ slug: 'titled', title: 'Titled', date: 'Feb 3, 2026' }),
+  ]));
+  expect(stories.map(story => story.id)).toEqual(['customers-titled']);
 });
 
 test('a story listed twice is kept once', () => {

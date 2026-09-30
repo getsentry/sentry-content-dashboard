@@ -25,6 +25,27 @@ test('first visit revalidation bypasses freshness, background/export reuses 30-s
   expect((await cache.refresh('blog', true)).items[0].title).toBe('Updated');
   expect(load).toHaveBeenCalledTimes(2);
 });
+test('a source with its own interval keeps it under a forced refresh', async () => {
+  // The dashboard forces on every visit, and re-reading a large page that
+  // changes monthly would buy nothing.
+  const load = vi.fn().mockResolvedValue({ items: [item('Original')] });
+  const cache = new SourceCache(loaders(load));
+  await cache.refresh('customers', true);
+  load.mockResolvedValue({ items: [item('Updated')] });
+  expect((await cache.refresh('customers', true)).items[0].title).toBe('Original');
+  expect(load).toHaveBeenCalledOnce();
+  // A source without an override still refetches when forced.
+  await cache.refresh('blog', true);
+  expect(load).toHaveBeenCalledTimes(2);
+});
+test('docs still refreshes on every read despite having an override', async () => {
+  const load = vi.fn().mockResolvedValue({ items: [item('Original')] });
+  const cache = new SourceCache(loaders(load));
+  await cache.refresh('docs');
+  load.mockResolvedValue({ items: [item('Updated')] });
+  expect((await cache.refresh('docs')).items[0].title).toBe('Updated');
+  expect(load).toHaveBeenCalledTimes(2);
+});
 test('failure retains last good snapshot, backs off, and expires old snapshots', async () => {
   vi.useFakeTimers();
   const load = vi.fn().mockResolvedValue({ items: [item('Good')] });

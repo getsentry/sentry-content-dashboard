@@ -5,7 +5,11 @@ import { getRedisClient } from '../utils/changelogStorage';
 import { normalizeContent, type ContentSource, type SourceSnapshot } from '../utils/content';
 import type { SnapshotStore } from './sourceCache';
 
-const key = (source: ContentSource) => `content:v1:${source}`;
+// Bumping a source's version abandons its stored snapshots. `customers` is at v2
+// because v1 deliberately cached an empty catalogue, and those snapshots outlive
+// a deploy by up to 24 hours.
+const SOURCE_VERSIONS: Partial<Record<ContentSource, number>> = { customers: 2 };
+const key = (source: ContentSource) => `content:v${SOURCE_VERSIONS[source] ?? 1}:${source}`;
 const UNLOCK = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`;
 const SAVE = `
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
