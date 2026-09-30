@@ -3,10 +3,14 @@ import { RefreshCoordinationError, RefreshDeferredError } from './cacheErrors';
 import { normalizeContent, type ContentSource, type SourcePayload, type SourceSnapshot } from '../utils/content';
 
 export const SOURCE_FRESHNESS_MS = 30000;
-// Sources backed by local storage rather than an upstream fetch. Reads are cheap
-// and must reflect the file as soon as a monitor run updates it, so they skip the
-// freshness window.
-const LOCAL_SOURCES = new Set<ContentSource>(['docs']);
+// How long a snapshot counts as fresh, per source. `docs` reads local storage,
+// which is cheap and must reflect a monitor run immediately, so it never waits.
+// `customers` parses a 767KB listing page that has no ETag to revalidate
+// against, and gains at most a few stories a month, so it polls hourly.
+const SOURCE_FRESHNESS_OVERRIDES: Partial<Record<ContentSource, number>> = {
+  docs: 0,
+  customers: 3600000,
+};
 export const SNAPSHOT_MAX_AGE_MS = 86400000;
 type Loader = (previous?: SourceSnapshot) => Promise<SourcePayload>;
 export interface SnapshotStore {
@@ -72,9 +76,9 @@ export class SourceCache {
   private async update(source: ContentSource, force: boolean, requestedAt: number) {
     if ((this.failures.get(source) || 0) > Date.now()) throw new Error(`${source} temporarily unavailable`);
     let previous = await this.read(source);
-    const local = LOCAL_SOURCES.has(source);
-    const minimumFetchedAt = force || local ? requestedAt : requestedAt - SOURCE_FRESHNESS_MS;
-    if (!local && !force && previous && Date.now() - previous.fetchedAt < SOURCE_FRESHNESS_MS) return previous;
+    const freshness = SOURCE_FRESHNESS_OVERRIDES[source] ?? SOURCE_FRESHNESS_MS;
+    const minimumFetchedAt = force || !freshness ? requestedAt : requestedAt - freshness;
+    if (freshness && !force && previous && Date.now() - previous.fetchedAt < freshness) return previous;
     try {
       let loaded: SourceSnapshot | undefined;
       let upstreamFailed = false;

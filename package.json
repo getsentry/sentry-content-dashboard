@@ -13,7 +13,6 @@
     "test-github": "node scripts/test-github-integration.js",
     "poll-github": "node scripts/poll-github.js",
     "seed-docs": "node scripts/seed-docs-changelog.js",
-    "seed-customers": "node scripts/seed-customer-baseline.js",
     "test": "vitest run"
   },
   "dependencies": {

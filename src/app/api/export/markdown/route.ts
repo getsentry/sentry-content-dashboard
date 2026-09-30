@@ -125,8 +125,7 @@ function generateMarkdown(content: ContentItem[]): string {
     groupedContent.customers.forEach((story, index) => {
       markdown += `### ${index + 1}. ${markdownText(story.title)}\n`;
       markdown += `- **URL**: ${markdownText(story.url)}\n`;
-      // Customer stories carry no upstream date; this is when they were first seen.
-      markdown += `- **First Seen**: ${story.publishedAt}\n`;
+      markdown += `- **Published**: ${story.publishedAt}\n`;
       if (story.description) markdown += `- **Description**: ${markdownText(story.description)}\n`;
       markdown += `\n`;
     });

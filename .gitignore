@@ -41,6 +41,3 @@ yarn-error.log*
 next-env.d.ts
 .env*.local
 !.env.example
-
-# runtime content state (seeded from data/customer-stories.json)
-/data/customer-stories-state.json
